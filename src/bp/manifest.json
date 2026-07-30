@@ -2,36 +2,55 @@
   "format_version": 2,
   "header": {
     "description": "The Slasher is a chainsaw-sword with a spectacle combat experience.",
-    "name": "Slasher Sword §cDEV§r [BP]",
+    "name": "Slasher Sword 1.8.6 [BP]",
     "uuid": "69c46a8e-1316-4070-9243-7833a57df856",
-    "version": [9999, 9999, 9999], // Only in DEV build
-    "min_engine_version": [1, 21, 70]
+    "version": [
+      1,
+      8,
+      6
+    ],
+    "min_engine_version": [
+      1,
+      26,
+      30
+    ]
   },
   "modules": [
     {
       "description": "Data",
       "type": "data",
       "uuid": "17a8085a-164a-4271-a854-351313d78d95",
-      "version": [0, 1, 0]
+      "version": [
+        0,
+        1,
+        0
+      ]
     },
     {
       "description": "Scripts",
       "language": "javascript",
       "type": "script",
       "uuid": "f54996d6-0bb5-44e7-9374-e985dacab070",
-      "version": [0, 1, 0],
+      "version": [
+        0,
+        1,
+        0
+      ],
       "entry": "scripts/index.js"
     }
   ],
   "dependencies": [
     {
-      // Resource pack
       "uuid": "421a1dc7-7746-4dc4-a0b1-b432e36f64e2",
-      "version": [9999, 9999, 9999]
+      "version": [
+        1,
+        8,
+        6
+      ]
     },
     {
       "module_name": "@minecraft/server",
-      "version": "1.18.0"
+      "version": "2.8.0"
     }
   ]
 }
