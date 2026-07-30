@@ -42,7 +42,11 @@
         "charging_start": {
           "animations": ["anim.fp.charging_start"],
           "transitions": [
-            { "pick": "v.charging_cancel || v.pick" },
+            // NOTE (1.0.7 audit): was "v.charging_cancel || v.pick" — v.charging_cancel
+            // is never set (see slasher.attachable.json), so it was always a
+            // no-op; simplified to what it actually evaluates to. See the
+            // note in the attachable file if this is ever revisited.
+            { "pick": "v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
             { "charging_hold": "q.all_animations_finished" },
@@ -55,7 +59,8 @@
         "charging_hold": {
           "animations": ["anim.fp.charging_hold"],
           "transitions": [
-            { "pick": "v.charging_cancel || v.pick" },
+            // NOTE (1.0.7 audit): see the matching note in "charging_start" above.
+            { "pick": "v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
             { "dash": "v.dash" },
@@ -95,7 +100,7 @@
             {
               "charged_atk_end": "q.all_animations_finished && v.charged_atk_continue"
             },
-            { "fast_atk_2": "v.fast_atk_1_cd" },
+            { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" }
           ]
         },
@@ -105,7 +110,7 @@
             { "pick": "v.pick" },
             { "charging_start": "v.charging_start" },
             { "charged_atk_end": "v.charged_atk_end" },
-            { "fast_atk_2": "v.fast_atk_1_cd" },
+            { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" }
           ]
         },
@@ -114,7 +119,7 @@
           "transitions": [
             { "charging_start": "v.charging_start" },
             { "pick": "q.all_animations_finished || v.pick" },
-            { "fast_atk_2": "v.fast_atk_1_cd" },
+            { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" }
           ],
           "blend_transition": 0.15
