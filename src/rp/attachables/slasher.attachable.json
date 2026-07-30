@@ -51,7 +51,13 @@
           "v.fast_atk_1_cd = q.cooldown_time_remaining('slasher_fast_atk_1') > 0;",
           "v.fast_atk_2_cd = q.cooldown_time_remaining('slasher_fast_atk_2') > 0;",
           "v.charging_start = q.cooldown_time_remaining('slasher_charging_start') > 0;",
-          "v.charging_cancel = q.cooldown_time_remaining('slasher_charging_cancel') > 0;",
+          // NOTE (1.0.7 audit): 'slasher_charging_cancel' is never started by
+          // any script (grep the scripts for setCooldown — it isn't there),
+          // so this was always a permanent no-op. Left here, commented out,
+          // as a marker in case a future revisit wants to actually build a
+          // distinct "charge cancelled" pose/cooldown instead of falling
+          // straight through to a fast-attack swing (current behavior).
+          // "v.charging_cancel = q.cooldown_time_remaining('slasher_charging_cancel') > 0;",
           "v.dash = q.cooldown_time_remaining('slasher_dash') > 0;",
           "v.charged_atk_start = q.cooldown_time_remaining('slasher_charged_atk_start') > 0;",
           "v.charged_atk_continue = q.cooldown_time_remaining('slasher_charged_atk_continue') > 0;",
