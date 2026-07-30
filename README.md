@@ -2,7 +2,9 @@
 
 # :chains: Slasher Sword Addon :carpentry_saw:
 
-Adds a chainsaw-sword named _Slasher_ with a spectacle combat experience to Minecraft Bedrock.
+Adds a spectacle combat experience featuring chainsaw-sword mechanics to Minecraft Bedrock.
+
+_<ins>Note:</ins> This is a customized fork built upon the original Slasher Sword Addon base._
 
 <img
   src="./media/slasher-swords.webp"
@@ -14,32 +16,19 @@ Adds a chainsaw-sword named _Slasher_ with a spectacle combat experience to Mine
 
 ## :information_source: About
 
-Slasher is a cool melee weapon that _was_ a part of [another addon by me](https://github.com/lc-studios-mc/scp-dystopia).
-
-**Compatible with other addons that modify player.json, including most gun addons!**
-
-With the sacrifice of first-person player arm skin, I've achieved a 99% compatibility.
-
-> "THERES NOT A SINGLE MELEE WEAPON PACK THAT HAS ANIMATIONS THAT GOES ALONG WITH GUN PACKS 😭"
-
-**No experiments required!**
-
-<ins>No Upcoming Creator Features. No Beta APIs. This addon will likely remain stable for a long time.</ins>
-By "stable", I mean it shouldn't be destroyed by a Minecraft update.
+* **Compatible with other addons** that modify `player.json`, including most gun addons! (Achieves ~99% compatibility by adjusting first-person player arm skin).
+* **No Experiments Required!** No Upcoming Creator Features or Beta APIs needed, keeping it stable across Minecraft updates.
 
 ## :green_book: Learning Material
 
-This addon is also meant to be a learning material for people who want to make cool animated melee weapons with complex mechanics without using player.json, or addon development in general.
+This repository serves as a base and learning material for crafting fluid, animated melee weapons with complex mechanics in Minecraft Bedrock without relying on `player.json`.
 
-You're expected to have at least some basic addon development knowledge before diving into this addon's source code, because it's definetely confusing for absolute beginners!
-
-Useful resources:
-
-- Amazing website: [Bedrock Wiki](https://wiki.bedrock.dev/)
-- If you don't know Git: [Git Tutorial For Dummies](https://www.youtube.com/watch?v=mJ-qvsxPHpY)
-
-Feel free to copy some stuff!
+### Credits & Acknowledgments
+* Original Slasher Sword Addon codebase.
+* Useful resources:
+  * [Bedrock Wiki](https://wiki.bedrock.dev/) - Essential Bedrock addon documentation.
+  * [Git Tutorial For Dummies](https://www.youtube.com/watch?v=mJ-qvsxPHpY) - Helpful guide for version control.
 
 ## :balance_scale: License
 
-[CC0 1.0 Universal](./LICENSE) - No copyright, public domain!
+[CC0 1.0 Universal](./LICENSE) - Public Domain / Free to use and modify!
