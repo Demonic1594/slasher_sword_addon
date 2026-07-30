@@ -7,23 +7,27 @@
     "tags": ["crafting_table"],
     // prettier-ignore
     "pattern": [
-      "  I",
-      " IC",
-      "ICS"
+      "CIN",
+      "INI",
+      "SIC"
     ],
     "key": {
-      "I": "minecraft:iron_ingot",
-      "C": "minecraft:coal",
-      "S": "minecraft:slime_ball"
+      "I": "minecraft:iron_block",
+      "N": "minecraft:netherite_block",
+      "S": "minecraft:slime_ball",
+      "C": "minecraft:chain"
     },
     "unlock": [
       { "item": "lc:slasher" },
       { "item": "lc:slasher_blade" },
-      { "item": "minecraft:iron_ingot" }
+      { "item": "minecraft:iron_block" },
+      { "item": "minecraft:netherite_block" },
+      { "item": "minecraft:slime_ball" },
+      { "item": "minecraft:chain" }
     ],
     "result": {
       "item": "lc:slasher_blade",
-      "count": 2
+      "count": 1
     }
   }
 }
