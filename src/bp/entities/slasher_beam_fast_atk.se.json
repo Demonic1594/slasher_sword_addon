@@ -7,6 +7,19 @@
       "is_summonable": true,
       "is_experimental": false,
       "runtime_identifier": "minecraft:snowball",
+      // Intentionally left disabled, unlike slasher_beam_charged_atk.se.json
+      // (which plays "slasher.beam.woosh" via this same animation): the
+      // fast attack fires 3 of these simultaneously, and looping the same
+      // sound 3x at once read as noisy/spammy in testing rather than
+      // impactful. Uncomment both this block and the matching entry in
+      // "properties" is NOT needed — properties are unaffected — just
+      // uncomment "scripts"/"animations" below to re-enable per-bit woosh.
+      // "scripts": {
+      //   "animate": ["anim.woosh_loop"]
+      // },
+      // "animations": {
+      //   "anim.woosh_loop": "animation.bp.slasher_beam.woosh_loop"
+      // },
       "properties": {
         "lc:is_visible": {
           "type": "bool",
@@ -80,8 +93,8 @@
         "is_pushable_by_piston": false
       },
       "minecraft:collision_box": {
-        "width": 0.28,
-        "height": 0.28
+        "width": 0.45,
+        "height": 0.45
       },
       "minecraft:physics": {},
       "minecraft:body_rotation_blocked": {},
