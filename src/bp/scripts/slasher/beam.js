@@ -1,21 +1,109 @@
+/**
+ * ============================================================================
+ * SLASHER — BEAMS
+ * ============================================================================
+ * The fast-attack and charged-attack swings both fire a projectile-like beam
+ * entity alongside the melee hit (shootFastAtkBeam / shootChargedAtkBeam).
+ * These beams are spawned once and then live independently in the world —
+ * see the comment on getSourceMainhandItemStack() below for why their damage
+ * numbers are snapshotted at shoot-time instead of read at hit-time.
+ * ============================================================================
+ */
+
 import * as mc from "@minecraft/server";
 import * as vec3 from "../utils/vec3.js";
-import { calculateFinalDamage } from "../utils/entity.js";
+import { CONFIG } from "../config.js";
+import { calculateFinalDamage, canBeAttacked, stampLastHitByPlayer } from "../utils/entity.js";
 import { randf } from "../utils/math.js";
-import { isPlayerCreativeOrSpectator } from "../utils/player.js";
+import * as physics from "../utils/physics.js";
+import { safeInvoke } from "../utils/safe.js";
+import {
+  applyDamageWithResistancePiercing,
+  getSharpnessBeamBonusDamage,
+  hasResistancePiercingEnchant,
+} from "./enchant_interactions.js";
 
-const BEAM_INFO = {
-  fastAtk: {
-    entityTypeId: "lc:slasher_beam_fast_atk",
-    shootForceMultiplier: 4.62,
-    directHitDamage: 1,
-  },
-  chargedAtk: {
-    entityTypeId: "lc:slasher_beam_charged_atk",
-    shootForceMultiplier: 2.23,
-    directHitDamage: 8,
-  },
-};
+/**
+ * Beams are their own entities that can outlive the swing that spawned them,
+ * so instead of reading the source player's currently-equipped item at
+ * hit-time (which silently loses the original enchant bonuses if the player
+ * switched items, died, or logged off before the beam landed), every
+ * enchant-driven stat the beam needs is snapshotted ONCE at shoot-time and
+ * stored directly on the beam entity itself via dynamic properties:
+ *   - lc:ownerName        the shooter's player name, so the beam can still
+ *                          be attributed back to them even if the `source`
+ *                          entity is no longer resolvable by id.
+ *   - lc:sharpnessBonus    flat beam damage bonus from Sharpness (see
+ *                          enchant_interactions.js interaction #2).
+ *   - lc:resistPierce      whether this beam pierces target Resistance (see
+ *                          enchant_interactions.js interaction #1).
+ * The beam's hit handlers below read these directly off the beam entity —
+ * `source` is only still consulted for things that inherently need a live
+ * player reference (self-hit checks, hitmarker sound, kill attribution),
+ * never for the damage numbers themselves.
+ * @param {mc.Entity | undefined} source
+ * @returns {mc.ItemStack | undefined}
+ */
+function getSourceMainhandItemStack(source) {
+  if (!source) return undefined;
+  try {
+    const equippable = source.getComponent("equippable");
+    return equippable?.getEquipment(mc.EquipmentSlot.Mainhand);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Snapshots the enchant-driven stats a beam needs from the shooter's
+ * mainhand item and writes them onto the beam entity as dynamic properties,
+ * along with the shooter's name. Call this once, right after spawning the
+ * beam and before it can possibly land.
+ * @param {mc.Entity} beamEntity
+ * @param {mc.Player} source
+ * @returns {void}
+ */
+function snapshotEnchantsOntoBeam(beamEntity, source) {
+  const itemStack = getSourceMainhandItemStack(source);
+
+  beamEntity.setDynamicProperty("lc:ownerName", source.name);
+  beamEntity.setDynamicProperty(
+    "lc:sharpnessBonus",
+    getSharpnessBeamBonusDamage(itemStack),
+  );
+  beamEntity.setDynamicProperty(
+    "lc:resistPierce",
+    hasResistancePiercingEnchant(itemStack),
+  );
+}
+
+/**
+ * @param {mc.Entity} beamEntity
+ * @returns {string | undefined}
+ */
+function getOwnerName(beamEntity) {
+  const value = beamEntity.getDynamicProperty("lc:ownerName");
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * @param {mc.Entity} beamEntity
+ * @returns {number}
+ */
+function getBeamSharpnessBonus(beamEntity) {
+  const value = beamEntity.getDynamicProperty("lc:sharpnessBonus");
+  return typeof value === "number" ? value : 0;
+}
+
+/**
+ * @param {mc.Entity} beamEntity
+ * @returns {boolean}
+ */
+function getBeamResistPierce(beamEntity) {
+  return beamEntity.getDynamicProperty("lc:resistPierce") === true;
+}
+
+const BEAM_INFO = CONFIG.beam;
 
 /**
  * @param {mc.Player} source
@@ -46,6 +134,7 @@ export function shootFastAtkBeam(source) {
     );
 
     setSourceId(beamEntity, source.id);
+    snapshotEnchantsOntoBeam(beamEntity, source);
 
     setRotation(beamEntity, {
       x: rot.x,
@@ -58,14 +147,16 @@ export function shootFastAtkBeam(source) {
     beamEntity.applyImpulse(force);
 
     mc.system.runTimeout(() => {
-      if (!beamEntity.isValid()) return;
+      safeInvoke("fast-atk beam visibility timeout", () => {
+        if (!beamEntity.isValid) return;
 
-      if (vec3.length(beamEntity.getVelocity()) <= 0.1) {
-        vanish(beamEntity);
-        return;
-      }
+        if (vec3.length(beamEntity.getVelocity()) <= 0.1) {
+          vanish(beamEntity);
+          return;
+        }
 
-      makeVisible(beamEntity);
+        makeVisible(beamEntity);
+      });
     }, 2);
   }
 }
@@ -97,6 +188,7 @@ export function shootChargedAtkBeam(source) {
   );
 
   setSourceId(beamEntity, source.id);
+  snapshotEnchantsOntoBeam(beamEntity, source);
 
   setRotation(beamEntity, {
     x: rot.x,
@@ -107,20 +199,22 @@ export function shootChargedAtkBeam(source) {
   beamEntity.applyImpulse(force);
 
   mc.system.runTimeout(() => {
-    if (!beamEntity.isValid()) return;
+    safeInvoke("charged-atk beam visibility timeout", () => {
+      if (!beamEntity.isValid) return;
 
-    if (vec3.length(beamEntity.getVelocity()) <= 0.1) {
-      vanish(beamEntity);
-      return;
-    }
+      if (vec3.length(beamEntity.getVelocity()) <= 0.1) {
+        vanish(beamEntity);
+        return;
+      }
 
-    makeVisible(beamEntity);
+      makeVisible(beamEntity);
+    });
   }, 2);
 }
 
 mc.world.afterEvents.dataDrivenEntityTrigger.subscribe(
   ({ entity: beamEntity }) => {
-    vanish(beamEntity, true);
+    safeInvoke("beam timeout trigger", () => vanish(beamEntity, true));
   },
   {
     entityTypes: [
@@ -132,46 +226,85 @@ mc.world.afterEvents.dataDrivenEntityTrigger.subscribe(
 );
 
 mc.world.afterEvents.projectileHitEntity.subscribe((event) => {
-  if (event.projectile.typeId === BEAM_INFO.fastAtk.entityTypeId) {
-    onFastAtkBeamHitEntity(event);
-  } else if (event.projectile.typeId === BEAM_INFO.chargedAtk.entityTypeId) {
-    onChargedAtkBeamHitEntity(event);
-  }
+  safeInvoke("projectileHitEntity", () => {
+    if (event.projectile.typeId === BEAM_INFO.fastAtk.entityTypeId) {
+      onFastAtkBeamHitEntity(event);
+    } else if (
+      event.projectile.typeId === BEAM_INFO.chargedAtk.entityTypeId
+    ) {
+      onChargedAtkBeamHitEntity(event);
+    }
+  });
 });
 
 mc.world.afterEvents.projectileHitBlock.subscribe((event) => {
-  if (event.projectile.typeId === BEAM_INFO.fastAtk.entityTypeId) {
-    onFastAtkBeamHitBlock(event);
-  } else if (event.projectile.typeId === BEAM_INFO.chargedAtk.entityTypeId) {
-    onChargedAtkBeamHitBlock(event);
-  }
+  safeInvoke("projectileHitBlock", () => {
+    if (event.projectile.typeId === BEAM_INFO.fastAtk.entityTypeId) {
+      onFastAtkBeamHitBlock(event);
+    } else if (
+      event.projectile.typeId === BEAM_INFO.chargedAtk.entityTypeId
+    ) {
+      onChargedAtkBeamHitBlock(event);
+    }
+  });
 });
 
 /** @param {mc.ProjectileHitEntityAfterEvent} event */
 function onFastAtkBeamHitEntity(event) {
-  if (!event.projectile.isValid()) return;
+  if (!event.projectile.isValid) return;
 
   const hitEntity = event.getEntityHit().entity;
   if (!hitEntity) return;
 
   const source = mc.world.getEntity(getSourceId(event.projectile) ?? "");
   if (source === hitEntity) return;
-  if (hitEntity instanceof mc.Player) {
-    if (!mc.world.gameRules.pvp) return;
-    if (isPlayerCreativeOrSpectator(hitEntity)) return;
-  }
+  if (!canBeAttacked(hitEntity)) return;
 
   let damaged = false;
   try {
-    damaged = hitEntity.applyDamage(BEAM_INFO.fastAtk.directHitDamage, {
-      cause: mc.EntityDamageCause.override,
-      damagingEntity: source,
-    });
+    // Damage-relevant enchant data comes from the beam's own snapshot taken
+    // at shoot-time (see snapshotEnchantsOntoBeam), not a live item lookup —
+    // this still lands correctly even if `source` switched items, died, or
+    // logged off while the beam was in flight. `source` itself is only used
+    // below for the self-hit check, damagingEntity attribution, and sound.
+    const rawDamage =
+      BEAM_INFO.fastAtk.directHitDamage +
+      getBeamSharpnessBonus(event.projectile);
+
+    const damage = Math.max(
+      1,
+      calculateFinalDamage(
+        rawDamage,
+        hitEntity,
+        CONFIG.enchantScaling.breachLevel,
+      ),
+    );
+
+    damaged = applyDamageWithResistancePiercing(
+      hitEntity,
+      damage,
+      {
+        // projectile, not override — override bypasses the target's
+        // Resistance at the engine level unconditionally, regardless of
+        // the snapshotted resistPierce flag below. getBeamResistPierce()
+        // (the sword's enchants at shoot-time) is meant to be the only
+        // thing that can bypass Resistance, not the damage cause itself.
+        cause: mc.EntityDamageCause.projectile,
+        damagingEntity: source,
+      },
+      getBeamResistPierce(event.projectile),
+    );
   } catch {}
 
   if (!damaged) return;
 
-  hitEntity.clearVelocity();
+  // Tag the target with who last hit it, read straight off the beam's own
+  // snapshot rather than the (possibly gone by now) source entity. This is
+  // what backs the kill leaderboard in slasher/leaderboard.js — see
+  // stampLastHitByPlayer's doc comment in utils/entity.js.
+  stampLastHitByPlayer(hitEntity, getOwnerName(event.projectile));
+
+  physics.clearVelocity(hitEntity);
 
   if (source instanceof mc.Player) {
     const soundLoc = vec3.add(
@@ -196,38 +329,67 @@ function onFastAtkBeamHitEntity(event) {
 
 /** @param {mc.ProjectileHitBlockAfterEvent} event */
 function onFastAtkBeamHitBlock(event) {
-  if (!event.projectile.isValid()) return;
+  if (!event.projectile.isValid) return;
 
   vanish(event.projectile);
 }
 
 /** @param {mc.ProjectileHitEntityAfterEvent} event */
 function onChargedAtkBeamHitEntity(event) {
-  if (!event.projectile.isValid()) return;
+  if (!event.projectile.isValid) return;
 
   const hitEntity = event.getEntityHit().entity;
   if (!hitEntity) return;
 
   const source = mc.world.getEntity(getSourceId(event.projectile) ?? "");
   if (source === hitEntity) return;
-  if (hitEntity instanceof mc.Player) {
-    if (!mc.world.gameRules.pvp) return;
-    if (isPlayerCreativeOrSpectator(hitEntity)) return;
-  }
+  if (!canBeAttacked(hitEntity)) return;
 
-  const damage = calculateFinalDamage(
-    BEAM_INFO.chargedAtk.directHitDamage,
-    hitEntity,
+  // See onFastAtkBeamHitEntity above — same snapshot-based approach.
+  const rawDamage =
+    BEAM_INFO.chargedAtk.directHitDamage +
+    getBeamSharpnessBonus(event.projectile);
+
+  // Floored at 1, matching every other Slasher damage path (melee swings,
+  // the fast-atk beam, lock-on ticks, plunge impact) — without this, a
+  // heavily-armored/Protection-stacked target could take 0 damage from a
+  // direct charged-beam hit while still eating the knockback/slowness.
+  const damage = Math.max(
+    1,
+    calculateFinalDamage(
+      rawDamage,
+      hitEntity,
+      CONFIG.enchantScaling.breachLevel,
+    ),
   );
 
   let damaged = false;
   try {
-    hitEntity.addEffect("slowness", 50, { amplifier: 0 });
-    damaged = hitEntity.applyDamage(damage, {
-      cause: mc.EntityDamageCause.override,
-      damagingEntity: source,
-    });
+    damaged = applyDamageWithResistancePiercing(
+      hitEntity,
+      damage,
+      {
+        // projectile, not override — override bypasses the target's
+        // Resistance at the engine level unconditionally, regardless of
+        // the snapshotted resistPierce flag below. getBeamResistPierce()
+        // (the sword's enchants at shoot-time) is meant to be the only
+        // thing that can bypass Resistance, not the damage cause itself.
+        cause: mc.EntityDamageCause.projectile,
+        damagingEntity: source,
+      },
+      getBeamResistPierce(event.projectile),
+    );
+
+    if (damaged) {
+      hitEntity.addEffect("slowness", BEAM_INFO.chargedAtk.targetSlownessDurationTicks, {
+        amplifier: BEAM_INFO.chargedAtk.targetSlownessAmplifier,
+      });
+    }
   } catch {}
+
+  if (damaged) {
+    stampLastHitByPlayer(hitEntity, getOwnerName(event.projectile));
+  }
 
   if (damaged && source instanceof mc.Player) {
     const soundLoc = vec3.add(
@@ -251,7 +413,7 @@ function onChargedAtkBeamHitEntity(event) {
 
 /** @param {mc.ProjectileHitBlockAfterEvent} event */
 function onChargedAtkBeamHitBlock(event) {
-  if (!event.projectile.isValid()) return;
+  if (!event.projectile.isValid) return;
 
   vanish(event.projectile);
 }
@@ -308,7 +470,7 @@ function spawnVanishParticle(beamEntity, timeout = false) {
  * @returns {string | undefined}
  */
 function getSourceId(beamEntity) {
-  const value = beamEntity.getDynamicProperty("sourceId");
+  const value = beamEntity.getDynamicProperty("lc:sourceId");
   if (typeof value !== "string") return undefined;
   return value;
 }
@@ -318,7 +480,7 @@ function getSourceId(beamEntity) {
  * @param {string=} value
  */
 function setSourceId(beamEntity, value) {
-  beamEntity.setDynamicProperty("sourceId", value);
+  beamEntity.setDynamicProperty("lc:sourceId", value);
 }
 
 /**
