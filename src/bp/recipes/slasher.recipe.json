@@ -7,24 +7,28 @@
     "tags": ["crafting_table"],
     // prettier-ignore
     "pattern": [
-      " BB",
-      "BMB",
-      "SB "
+      "BSD",
+      "SNS",
+      "MSB"
     ],
     "key": {
-      "B": "lc:slasher_blade",
-      "S": "minecraft:netherite_sword",
-      "M": "minecraft:mace"
+      "S": "lc:slasher_blade",
+      "M": "minecraft:mace",
+      "D": "minecraft:netherite_sword",
+      "N": "minecraft:nether_star",
+      "B": "minecraft:netherite_ingot"
     },
     "unlock": [
       { "item": "lc:slasher" },
       { "item": "lc:slasher_blade" },
+      { "item": "minecraft:mace" },
       { "item": "minecraft:netherite_sword" },
-      { "item": "minecraft:mace" }
+      { "item": "minecraft:nether_star" },
+      { "item": "minecraft:netherite_ingot" }
     ],
     "result": {
       "item": "lc:slasher",
-      "amount": 1
+      "count": 1
     }
   }
 }
