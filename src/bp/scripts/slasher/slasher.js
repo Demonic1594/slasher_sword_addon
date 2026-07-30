@@ -1,15 +1,48 @@
 /**
- * This is the main script where the core behavior of the Slasher is written.
+ * ============================================================================
+ * SLASHER — CORE BEHAVIOR
+ * ============================================================================
+ * The Slasher is driven by a small state machine: `Slasher` (an ItemExtender,
+ * see item_extender/) holds a single `currentState`, and every tick/event
+ * simply forwards to whichever state is currently active. Each state is a
+ * `SlasherState` subclass below, roughly in the order they can be entered:
+ *
+ *   IdleState        — nothing happening; waiting for the item to be used.
+ *   FastAtkState      — quick melee swing + matching beam.
+ *   ChargingState     — holding the charge-attack button; charges up.
+ *   ChargedAtkState   — releases the charge: dash + swing/beam, then either
+ *                       ends or (if a target is right in front) hands off to:
+ *   LockonAtkState    — grabs a target and repeatedly chainsaws it in place.
+ *   PlungeWindupState — rises briefly before a ground-pound plunge.
+ *   PlungeFallState   — falling during the plunge, accelerating over time.
+ *   PlungeImpactState — the landing hit: ground-pound damage + effects.
+ *
+ * A state transitions to the next by calling `slasher.changeState(new X(...))`
+ * — see `Slasher.changeState` below for the exact enter/exit lifecycle.
+ * ============================================================================
  */
 
 import * as mc from "@minecraft/server";
 import * as vec3 from "../utils/vec3.js";
-import { ItemExtender } from "../item_extender/item_extender.js";
-import { registerItemExtender } from "../item_extender/profile_registry.js";
-import { isPlayerCreativeOrSpectator } from "../utils/player.js";
-import { calculateFinalDamage, getEntityName } from "../utils/entity.js";
+import { CONFIG } from "../config.js";
+import { ItemExtender, registerItemExtender } from "../item_extender/item_extender.js";
+import {
+  calculateFinalDamage,
+  canBeAttacked,
+  getEntityName,
+  hasLineOfSightFromAny,
+  stampLastHitByPlayer,
+} from "../utils/entity.js";
 import { clamp, randf, randi } from "../utils/math.js";
+import * as physics from "../utils/physics.js";
+import { safeInvoke } from "../utils/safe.js";
 import { shootChargedAtkBeam, shootFastAtkBeam } from "./beam.js";
+import {
+  applyFireAspectDebilitation,
+  applySlasherDamage,
+  invalidateMendingCacheFor,
+  shouldApplyDurabilityDamage,
+} from "./enchant_interactions.js";
 
 // Extend "lc:slasher" item with scripting
 registerItemExtender("lc:slasher", (args) => new Slasher(args));
@@ -23,12 +56,81 @@ class Slasher extends ItemExtender {
     this.currentState.onEnter();
   }
 
+  /** @private Whether a post-dash landing-resistance watch is currently running. */
+  dashResistanceActive = false;
+  /** @private Ticks elapsed since the current dash landing-resistance watch started. */
+  dashResistanceTicksElapsed = 0;
+
   onCreate() {
-    this.user.startItemCooldown("slasher_pick", 2);
+    this.user.startItemCooldown("slasher_pick", CONFIG.cooldowns.pick);
+    invalidateMendingCacheFor(this.user);
   }
 
   onTick(itemStack) {
+    safeInvoke("dash landing resistance tracking", () =>
+      this.tickDashResistanceTracking(),
+    );
     this.currentState.tick(itemStack);
+  }
+
+  /**
+   * Starts (or restarts) the post-dash landing-resistance watch: grants an
+   * immediate pulse of Resistance and arms tickDashResistanceTracking() to
+   * keep refreshing it every tick until the user lands. Safe to call again
+   * mid-watch (e.g. chaining another dash while still airborne) — it simply
+   * resets the elapsed-ticks counter and re-pulses the effect.
+   */
+  startDashResistanceTracking() {
+    this.dashResistanceActive = true;
+    this.dashResistanceTicksElapsed = 0;
+
+    this.user.addEffect("resistance", CONFIG.dash.resistanceRefreshTicks, {
+      amplifier: CONFIG.dash.resistanceAmplifier,
+      showParticles: false,
+    });
+  }
+
+  /**
+   * Runs every tick (regardless of the current SlasherState) while a dash
+   * landing-resistance watch is active. Keeps Resistance topped up as long
+   * as the user hasn't landed yet, so the covered airtime always matches
+   * however long the user actually stays airborne — whether that's from a
+   * single dash, a dash off a tall cliff, or several chained dashes — rather
+   * than a duration guessed once at dash-time. See CONFIG.dash for details.
+   */
+  tickDashResistanceTracking() {
+    if (!this.dashResistanceActive) return;
+
+    this.dashResistanceTicksElapsed++;
+
+    const timedOut =
+      this.dashResistanceTicksElapsed >= CONFIG.dash.resistanceMaxTrackedTicks;
+
+    if (this.user.isOnGround || timedOut) {
+      this.dashResistanceActive = false;
+
+      // Only bother with the extra-safe final pulse if we actually landed;
+      // if we just hit the safety timeout while still airborne, stop
+      // refreshing rather than granting more free resistance.
+      if (this.user.isOnGround) {
+        this.user.addEffect(
+          "resistance",
+          CONFIG.dash.resistanceRefreshTicks +
+            CONFIG.dash.resistanceLandingBufferTicks,
+          {
+            amplifier: CONFIG.dash.resistanceAmplifier,
+            showParticles: false,
+          },
+        );
+      }
+
+      return;
+    }
+
+    this.user.addEffect("resistance", CONFIG.dash.resistanceRefreshTicks, {
+      amplifier: CONFIG.dash.resistanceAmplifier,
+      showParticles: false,
+    });
   }
 
   /**
@@ -133,7 +235,7 @@ class Slasher extends ItemExtender {
 
   /** @returns {number|undefined} */
   getNextDurabilityDamage() {
-    const value = this.user.getDynamicProperty("nextSlasherDurabilityDamage");
+    const value = this.user.getDynamicProperty("lc:nextSlasherDurabilityDamage");
     if (typeof value !== "number") return;
     return Math.floor(value);
   }
@@ -141,13 +243,17 @@ class Slasher extends ItemExtender {
   /** @param {number=} value */
   setNextDurabilityDamage(value) {
     this.user.setDynamicProperty(
-      "nextSlasherDurabilityDamage",
+      "lc:nextSlasherDurabilityDamage",
       value == undefined || value <= 0 ? undefined : Math.floor(value),
     );
   }
 
-  /** @param {number} value */
+  /**
+   * @param {number} value
+   */
   addNextDurabilityDamage(value) {
+    if (!shouldApplyDurabilityDamage(this.userMainhandSlot.getItem())) return;
+
     let current = this.getNextDurabilityDamage();
     if (typeof current !== "number") current = 0;
     this.setNextDurabilityDamage(current + Math.floor(value));
@@ -179,7 +285,7 @@ class Slasher extends ItemExtender {
 
     this.setNextDurabilityDamage(undefined);
 
-    if (this.user.getGameMode() === mc.GameMode.creative) return false;
+    if (this.user.getGameMode() === mc.GameMode.Creative) return false;
     if (this.isNeedingRepair(durabilityComp)) return false;
 
     const newDamage = Math.min(
@@ -213,7 +319,12 @@ class Slasher extends ItemExtender {
 }
 
 /**
- * Base class for all Slasher states.
+ * Base class every Slasher state extends. Subclasses override whichever hooks
+ * they care about; all of them default to a no-op, so a state only needs to
+ * implement the handful that matter to it. `currentTick` is scoped to the
+ * state instance — it starts at 0 when the state is entered, not the game's
+ * global tick counter — which is why timing comments elsewhere in this file
+ * ("every 3 ticks", "at tick 4", etc.) always mean "since entering this state."
  */
 class SlasherState {
   /**
@@ -277,7 +388,8 @@ class SlasherState {
 }
 
 /**
- * Slasher state for idle.
+ * The resting state: nothing is happening. The Slasher sits here between
+ * attacks, waiting for the item to be used (fast-attack) or held (charging).
  */
 class IdleState extends SlasherState {
   /** @param {mc.ItemStack} itemStack */
@@ -315,13 +427,14 @@ class IdleState extends SlasherState {
 }
 
 /**
- * Slasher state for fast-attacking.
+ * The quick, un-charged melee attack: a short swing that damages nearby
+ * entities in front of the user, paired with a matching fast-attack beam.
  */
 class FastAtkState extends SlasherState {
-  static STATE_LIFESPAN_MAX = 15;
-  static PREVENT_CHARGE_TICK = 9;
-  static COOLDOWN_MAX = 2;
-  static SWING_DAMAGE = 2;
+  static STATE_LIFESPAN_MAX = CONFIG.fastAtk.stateLifespanMaxTicks;
+  static PREVENT_CHARGE_TICK = CONFIG.fastAtk.preventChargeTick;
+  static COOLDOWN_MAX = CONFIG.fastAtk.cooldownMaxTicks;
+  static SWING_DAMAGE = CONFIG.fastAtk.swingDamage;
 
   ticksUntilExitState = FastAtkState.STATE_LIFESPAN_MAX;
   cooldown = 0;
@@ -406,58 +519,63 @@ class FastAtkState extends SlasherState {
     this.slasher.playSoundAtHeadFront("slasher.fast_atk");
 
     mc.system.run(() => {
-      shootFastAtkBeam(this.slasher.user);
-      this.swingDamageNearbyEntities();
+      safeInvoke("fast-atk swing (beam + nearby damage)", () => {
+        shootFastAtkBeam(this.slasher.user);
+        this.swingDamageNearbyEntities();
+      });
     });
   }
 
   swingDamageNearbyEntities() {
     const entities = this.slasher.user.dimension.getEntities({
       closest: 10,
-      maxDistance: 2.2,
+      maxDistance: CONFIG.fastAtk.swingHitboxMaxDistance,
       excludeTypes: ["minecraft:item", "minecraft:xp_orb"],
       location: this.slasher.getHeadFrontLocation(),
     });
+
+    const itemStack = this.slasher.userMainhandSlot.getItem();
 
     for (let i = 0; i < entities.length; i++) {
       const entity = entities[i];
 
       if (entity === this.slasher.user) continue;
-      if (entity instanceof mc.Player) {
-        if (!mc.world.gameRules.pvp) continue;
-        if (isPlayerCreativeOrSpectator(entity)) continue;
-      }
+      if (!canBeAttacked(entity)) continue;
 
       const damage = Math.max(
         1,
-        calculateFinalDamage(FastAtkState.SWING_DAMAGE, entity),
+        calculateFinalDamage(
+          FastAtkState.SWING_DAMAGE,
+          entity,
+          CONFIG.enchantScaling.breachLevel,
+        ),
       );
 
+      let damaged = false;
       try {
-        const damaged = entity.applyDamage(damage, {
+        damaged = applySlasherDamage(itemStack, entity, damage, {
           cause: mc.EntityDamageCause.entityAttack,
           damagingEntity: this.slasher.user,
         });
-
-        if (!damaged) continue;
       } catch {}
 
-      this.slasher.addNextDurabilityDamage(1);
+      if (!damaged) continue;
+
+      applyFireAspectDebilitation(itemStack, entity);
+      stampLastHitByPlayer(entity, this.slasher.user.name);
+
+      this.slasher.addNextDurabilityDamage(CONFIG.fastAtk.durabilityDamagePerHit);
     }
   }
 }
 
 /**
- * Slasher state for charging.
+ * Entered while the player holds down the use button: winds up towards a
+ * charged attack, showing the charge-progress UI, until either released
+ * (-> ChargedAtkState) or cancelled.
  */
 class ChargingState extends SlasherState {
-  static CHARGE_UI_FRAMES = [
-    ">    X    <",
-    ">   X   <",
-    ">  X  <",
-    "> X <",
-    ">X<",
-  ];
+  static CHARGE_UI_FRAMES = CONFIG.charging.chargeUiFrames;
   static FULL_CHARGE_DURATION = this.CHARGE_UI_FRAMES.length;
 
   onTick() {
@@ -476,7 +594,7 @@ class ChargingState extends SlasherState {
     }
 
     if (this.currentTick === 0) {
-      this.slasher.setCooldown("slasher_charging_start");
+      this.slasher.setCooldown("slasher_charging_start", CONFIG.cooldowns.chargingStart);
 
       this.slasher.user.playAnimation("animation.slasher.tp.charging_start");
     }
@@ -506,7 +624,9 @@ class ChargingState extends SlasherState {
     // Cancelling a charge should start fast attack
     this.slasher.changeState(new FastAtkState(this.slasher));
     mc.system.run(() => {
-      this.slasher.user.onScreenDisplay.setActionBar("§8---");
+      safeInvoke("charge-cancel actionbar reset", () =>
+        this.slasher.user.onScreenDisplay.setActionBar("§8---"),
+      );
     });
   }
 
@@ -528,26 +648,23 @@ class ChargingState extends SlasherState {
 }
 
 /**
- * Slasher state for charged-attack.
+ * Released charge attack: dashes the user forward (with a matching beam),
+ * dealing heavy damage to anything caught in the swing. If a target ends up
+ * right in front of the user afterwards, this hands off into LockonAtkState
+ * to grab and chainsaw it; otherwise it just ends back at IdleState.
  */
 class ChargedAtkState extends SlasherState {
-  static GROUND_DASH_DURATION = 2;
-  static AIR_DASH_DURATION = 4;
-  static CHARGED_ATK_DAMAGING_DURATION = 5;
+  static GROUND_DASH_DURATION = CONFIG.dash.groundDashDurationTicks;
+  static AIR_DASH_DURATION = CONFIG.dash.airDashDurationTicks;
+  static CHARGED_ATK_DAMAGING_DURATION = CONFIG.chargedAtk.damagingDurationTicks;
 
-  static CHARGED_ATK_DAMAGE = 14;
+  static CHARGED_ATK_DAMAGE = CONFIG.chargedAtk.damage;
 
-  static ATK_EXCLUDED_FAMILIES = [
-    "ignore_slasher_charged_atk",
-    "scpdy_ignore_slasher_slash",
-  ];
+  static ATK_EXCLUDED_FAMILIES = ["ignore_slasher_charged_atk"];
   static LOCKON_EXCLUDED_FAMILIES = [
     "inanimate",
     "projectile",
-    "scp096",
-    "scp682",
     "ignore_slasher_lockon",
-    "scpdy_ignore_slasher_capture",
   ];
   static ATK_EXCLUDED_TYPES = ["minecraft:item", "minecraft:xp_orb"];
   static LOCKON_EXCLUDED_TYPES = [
@@ -557,16 +674,16 @@ class ChargedAtkState extends SlasherState {
     "minecraft:wither",
     "minecraft:ender_dragon",
   ];
-  static LOCKON_EXCLUDED_TAGS = ["scpdy_ignore_slasher_capture"];
+  static LOCKON_EXCLUDED_TAGS = [];
 
   weaknessEffect = true;
   chargedAtkStartTick = 0;
   alreadyHitEntities = /** @type {mc.Entity[]} */ ([]);
 
   onTick() {
-    if (this.weaknessEffect && this.currentTick % 2 === 0) {
-      this.slasher.user.addEffect("weakness", 3, {
-        amplifier: 255,
+    if (this.weaknessEffect && this.currentTick % CONFIG.chargedAtk.weaknessEffect.everyNTicks === 0) {
+      this.slasher.user.addEffect("weakness", CONFIG.chargedAtk.weaknessEffect.durationTicks, {
+        amplifier: CONFIG.chargedAtk.weaknessEffect.amplifier,
         showParticles: false,
       });
     }
@@ -628,12 +745,13 @@ class ChargedAtkState extends SlasherState {
     const isOnGround = this.slasher.user.isOnGround;
     const impulse = this.getDashImpulse(isOnGround);
 
-    this.slasher.user.applyImpulse(impulse);
+    physics.applyImpulse(this.slasher.user, impulse);
+    this.slasher.startDashResistanceTracking();
 
     this.chargedAtkStartTick = isOnGround
       ? ChargedAtkState.GROUND_DASH_DURATION
       : ChargedAtkState.AIR_DASH_DURATION;
-    this.slasher.setCooldown("slasher_dash");
+    this.slasher.setCooldown("slasher_dash", CONFIG.cooldowns.dash);
     this.slasher.playSound3DAnd2D("slasher.dash", 10, { volume: 1.3 });
 
     this.slasher.shakeCamera(0.05, 0.08);
@@ -642,16 +760,16 @@ class ChargedAtkState extends SlasherState {
   }
 
   /**
-   * @param {boolean} isOnGrouund
+   * @param {boolean} isOnGround
    * @returns {mc.Vector3}
    */
-  getDashImpulse(isOnGrouund) {
+  getDashImpulse(isOnGround) {
     const base = vec3.changeDir(
-      vec3.scale(vec3.FORWARD, 2.2),
+      vec3.scale(vec3.FORWARD, CONFIG.dash.airImpulseMagnitude),
       this.slasher.user.getViewDirection(),
     );
 
-    if (!isOnGrouund) return base;
+    if (!isOnGround) return base;
 
     const groundImpulse = vec3.normalize({
       x: base.x,
@@ -659,7 +777,7 @@ class ChargedAtkState extends SlasherState {
       z: base.z,
     });
 
-    return vec3.scale(groundImpulse, 3.9);
+    return vec3.scale(groundImpulse, CONFIG.dash.groundImpulseMagnitude);
   }
 
   /** @param {number} atkTick */
@@ -678,14 +796,16 @@ class ChargedAtkState extends SlasherState {
         return;
       }
 
-      this.slasher.setCooldown("slasher_charged_atk_continue", 4);
-      this.slasher.setCooldown("slasher_charged_atk_start");
+      this.slasher.setCooldown("slasher_charged_atk_continue", CONFIG.cooldowns.chargedAtkContinue);
+      this.slasher.setCooldown("slasher_charged_atk_start", CONFIG.cooldowns.chargedAtkStart);
       this.slasher.shakeCamera(0.07, 0.08);
     } else if (atkTick === 1) {
       shootChargedAtkBeam(this.slasher.user);
 
       this.slasher.user.playAnimation("animation.slasher.tp.charged_atk_end");
     }
+
+    const itemStack = this.slasher.userMainhandSlot.getItem();
 
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
@@ -694,26 +814,48 @@ class ChargedAtkState extends SlasherState {
 
       let damaged = false;
       try {
-        const dmg = calculateFinalDamage(
-          ChargedAtkState.CHARGED_ATK_DAMAGE,
-          target,
+        // Floored at 1, matching every other Slasher damage path — without
+        // this, a heavily-armored/Protection-stacked target could take the
+        // full wind-up of a charged attack and register 0 damage.
+        const dmg = Math.max(
+          1,
+          calculateFinalDamage(
+            ChargedAtkState.CHARGED_ATK_DAMAGE,
+            target,
+            CONFIG.enchantScaling.breachLevel,
+          ),
         );
 
-        damaged = target.applyDamage(dmg, {
-          cause: mc.EntityDamageCause.override,
+        damaged = applySlasherDamage(itemStack, target, dmg, {
+          // entityAttack, not override — override bypasses the target's
+          // Resistance at the engine level unconditionally, regardless of
+          // whether the sword actually has the qualifying enchant. Letting
+          // this behave like a normal hit means applySlasherDamage's own
+          // resistance-piercing check (interaction #1 in
+          // enchant_interactions.js) is the only thing that can bypass it.
+          cause: mc.EntityDamageCause.entityAttack,
           damagingEntity: this.slasher.user,
         });
       } catch {}
 
       if (!damaged) continue;
 
+      applyFireAspectDebilitation(itemStack, target);
+      stampLastHitByPlayer(target, this.slasher.user.name);
+
+      // Intentionally inert right now: no entity file in this pack defines
+      // "lc:on_getting_chainsawed", so this call currently does nothing on
+      // its own. Kept in on purpose as a stable extension point — any mob
+      // (in this pack, or a third-party one) can define this event on
+      // itself to react to being chainsawed (a hit animation, a sound, a
+      // scripted behavior, etc.) with no script changes needed here. Its
+      // value is in staying available for whatever hooks into it, not in
+      // doing anything by itself today — don't remove this as "dead code."
       try {
         target.triggerEvent("lc:on_getting_chainsawed");
       } catch {}
 
-      this.alreadyHitEntities.push(target);
-
-      this.slasher.addNextDurabilityDamage(2);
+      this.slasher.addNextDurabilityDamage(CONFIG.chargedAtk.durabilityDamagePerHit);
 
       if (i > 2) continue;
 
@@ -730,10 +872,12 @@ class ChargedAtkState extends SlasherState {
       this.slasher.shakeCamera(0.13, 0.26);
 
       mc.system.runTimeout(() => {
-        this.slasher.playSoundAtHeadFront("slasher.critical", {
-          volume: 1.1,
-          pitch: randf(1, 1.08),
-        });
+        safeInvoke("critical-hit sound timeout", () =>
+          this.slasher.playSoundAtHeadFront("slasher.critical", {
+            volume: 1.1,
+            pitch: randf(1, 1.08),
+          }),
+        );
       }, i);
     }
   }
@@ -783,32 +927,23 @@ class ChargedAtkState extends SlasherState {
       candidates.push(...entities);
     }
 
-    for (const entity of candidates) {
+    // Multiple check zones can return the same entity; dedupe before doing the
+    // (comparatively expensive) raycast visibility check so each candidate is
+    // only ever raycast once instead of once per zone it appeared in.
+    const uniqueCandidates = new Set(candidates);
+
+    for (const entity of uniqueCandidates) {
       if (entity === this.slasher.user) continue;
-      if (result.includes(entity)) continue;
-      if (entity instanceof mc.Player) {
-        if (!mc.world.gameRules.pvp) continue;
-        if (isPlayerCreativeOrSpectator(entity)) continue;
-      }
+      if (!canBeAttacked(entity)) continue;
 
-      // Check if entity is actually visible via raycast
-      const raycastHit = [
-        ...this.slasher.user.dimension.getEntitiesFromRay(
-          this.slasher.user.getHeadLocation(),
-          vec3.subtract(entity.location, this.slasher.user.getHeadLocation()),
-        ),
-        ...this.slasher.user.dimension.getEntitiesFromRay(
-          this.slasher.getHeadFrontLocation(),
-          vec3.subtract(
-            entity.getHeadLocation(),
-            this.slasher.user.getHeadLocation(),
-          ),
-        ),
-      ];
+      const isVisible = hasLineOfSightFromAny(
+        this.slasher.user.dimension,
+        [this.slasher.user.getHeadLocation(), this.slasher.getHeadFrontLocation()],
+        entity,
+        entity.getHeadLocation(),
+      );
 
-      if (raycastHit.some((x) => x.entity === entity)) {
-        result.push(entity);
-      }
+      if (isVisible) result.push(entity);
     }
 
     return result;
@@ -816,7 +951,11 @@ class ChargedAtkState extends SlasherState {
 }
 
 /**
- * Slasher state for lock-on attack that leaps at the target and deals continuous damage..
+ * Grabs a locked-on target and repeatedly chainsaws it in place every tick
+ * for as long as the user holds sneak. Damage and speed both escalate the
+ * longer a single target is held (see CONFIG.lockonAtk.escalation), with
+ * Wither kicking in and eventually shutting off the target's healing
+ * entirely past certain cumulative-damage thresholds.
  */
 class LockonAtkState extends SlasherState {
   attackerLoc = /** @type {mc.Vector3} */ (vec3.ZERO);
@@ -825,6 +964,25 @@ class LockonAtkState extends SlasherState {
   nextCritParticleTick = 0;
   tickWhenEndingStarted = -1;
   allowChangingState = false;
+
+  /**
+   * Cumulative HP dealt to each locked target since this grab began, keyed
+   * by the target entity itself. Drives the damage/speed escalation and the
+   * Wither/no-heal thresholds — see CONFIG.lockonAtk.escalation. Reset
+   * naturally every time a new LockonAtkState is created (i.e. every fresh
+   * grab starts the ramp-up over from zero).
+   * @type {Map<mc.Entity, number>}
+   */
+  cumulativeDamageDealt = new Map();
+
+  /**
+   * Once a target crosses the no-heal threshold, this tracks the highest HP
+   * value it's "allowed" to have — any tick where its actual HP comes back
+   * higher (natural regen, the Regeneration effect, Instant Health, etc.)
+   * gets clamped straight back down to this floor.
+   * @type {Map<mc.Entity, number>}
+   */
+  healSuppressionFloor = new Map();
 
   /**
    * @param {Slasher} slasher
@@ -836,8 +994,8 @@ class LockonAtkState extends SlasherState {
   }
 
   onEnter() {
-    this.slasher.setCooldown("slasher_charged_atk_hold");
-    this.slasher.setCooldown("slasher_charged_atk_start");
+    this.slasher.setCooldown("slasher_charged_atk_hold", CONFIG.cooldowns.chargedAtkHold);
+    this.slasher.setCooldown("slasher_charged_atk_start", CONFIG.cooldowns.chargedAtkStart);
 
     if (this.targets.length <= 0) {
       return;
@@ -882,7 +1040,7 @@ class LockonAtkState extends SlasherState {
     const endingTick = this.currentTick - this.tickWhenEndingStarted;
 
     if (endingTick === 0) {
-      this.slasher.setCooldown("slasher_charged_atk_end", 2);
+      this.slasher.setCooldown("slasher_charged_atk_end", CONFIG.cooldowns.chargedAtkEnd);
       this.slasher.playSound3DAnd2D("slasher.charged_atk", 10, { volume: 1.3 });
 
       this.slasher.user.playAnimation("animation.slasher.tp.charged_atk_end");
@@ -896,7 +1054,7 @@ class LockonAtkState extends SlasherState {
     }
 
     if (endingTick >= 16) {
-      this.slasher.setCooldown("slasher_pick");
+      this.slasher.setCooldown("slasher_pick", CONFIG.cooldowns.pick);
       this.slasher.changeState(new IdleState(this.slasher));
     }
   }
@@ -904,12 +1062,14 @@ class LockonAtkState extends SlasherState {
   onHitEntity() {
     if (!this.allowChangingState) return;
     this.slasher.user.removeEffect("weakness");
+    this.slasher.user.removeEffect("resistance");
     this.slasher.changeState(new FastAtkState(this.slasher));
   }
 
   onHitBlock() {
     if (!this.allowChangingState) return;
     this.slasher.user.removeEffect("weakness");
+    this.slasher.user.removeEffect("resistance");
     this.slasher.changeState(new FastAtkState(this.slasher));
   }
 
@@ -918,6 +1078,7 @@ class LockonAtkState extends SlasherState {
       this.targets.length <= 0 || !this.slasher.isSneaking();
 
     if (shouldStartEnding) {
+      this.slasher.user.removeEffect("resistance");
       this.slasher.playSound3DAnd2D("slasher.chainsaw.finish", 10, {
         volume: 1.2,
       });
@@ -925,9 +1086,18 @@ class LockonAtkState extends SlasherState {
       return;
     }
 
-    if (this.currentTick % 2 === 0)
-      this.slasher.user.addEffect("weakness", 3, {
-        amplifier: 255,
+    this.slasher.user.addEffect(
+      "resistance",
+      CONFIG.lockonAtk.userResistanceDurationTicks,
+      {
+        amplifier: CONFIG.lockonAtk.userResistanceAmplifier,
+        showParticles: false,
+      },
+    );
+
+    if (this.currentTick % CONFIG.lockonAtk.userWeaknessEveryNTicks === 0)
+      this.slasher.user.addEffect("weakness", CONFIG.lockonAtk.userWeaknessDurationTicks, {
+        amplifier: CONFIG.lockonAtk.userWeaknessAmplifier,
         showParticles: false,
       });
 
@@ -972,12 +1142,18 @@ class LockonAtkState extends SlasherState {
       this.slasher.user.playAnimation("animation.slasher.tp.charged_atk_hold");
     }
 
+    // Hoisted above the loop — the item can't change mid-tick, so there's no
+    // reason to re-fetch it once per target (every other damage site in this
+    // file already does this).
+    const itemStack = this.slasher.userMainhandSlot.getItem();
+
     for (let i = 0; i < this.targets.length; i++) {
       const target = this.targets[i];
 
       if (
-        !target.isValid() ||
-        target.matches({ tags: ChargedAtkState.LOCKON_EXCLUDED_TAGS })
+        !target.isValid ||
+        (ChargedAtkState.LOCKON_EXCLUDED_TAGS.length > 0 &&
+          target.matches({ tags: ChargedAtkState.LOCKON_EXCLUDED_TAGS }))
       ) {
         this.targets.splice(i, 1);
         i--;
@@ -987,6 +1163,7 @@ class LockonAtkState extends SlasherState {
       const targetHealth = target.getComponent("health");
 
       if (targetHealth?.currentValue == 0) {
+        this.slasher.user.removeEffect("resistance");
         this.targets.splice(i, 1);
         i--;
         continue;
@@ -994,25 +1171,119 @@ class LockonAtkState extends SlasherState {
 
       target.tryTeleport(this.targetLockLoc, { keepVelocity: false });
 
+      const escalation = CONFIG.lockonAtk.escalation;
+      const cumulativeHp = this.cumulativeDamageDealt.get(target) ?? 0;
+      const thresholdHp = escalation.thresholdHearts * CONFIG.hpPerHeart;
+      const thresholdsCrossed = Math.floor(cumulativeHp / thresholdHp);
+
+      const reachedWither = cumulativeHp >= escalation.witherThresholdHearts * CONFIG.hpPerHeart;
+      const reachedNoHeal = cumulativeHp >= escalation.noHealThresholdHearts * CONFIG.hpPerHeart;
+
+      // Wither + user Regeneration kick in at the 50-heart mark and persist
+      // (reapplied every tick so they can't lapse) for the rest of the grab;
+      // Wither's amplifier steps up again once the 75-heart no-heal mark hits.
+      if (reachedWither) {
+        try {
+          target.addEffect(
+            "wither",
+            escalation.witherDurationTicks,
+            {
+              amplifier: reachedNoHeal
+                ? escalation.noHealWitherAmplifier
+                : escalation.witherAmplifier,
+              showParticles: false,
+            },
+          );
+
+          this.slasher.user.addEffect(
+            "regeneration",
+            escalation.userRegenDurationTicks,
+            { amplifier: escalation.userRegenAmplifier, showParticles: false },
+          );
+        } catch {}
+      }
+
+      // Past the 75-heart mark, the target can no longer heal by any means
+      // (natural regen, the Regeneration effect, Instant Health, ...): every
+      // tick, if its HP came back higher than the floor we last saw, clamp
+      // it straight back down.
+      if (reachedNoHeal && targetHealth) {
+        const floor = this.healSuppressionFloor.get(target);
+        if (floor !== undefined && targetHealth.currentValue > floor) {
+          try {
+            targetHealth.setCurrentValue(floor);
+          } catch {}
+        }
+      }
+
+      // The actual damage tick is gated to an interval that starts at
+      // baseIntervalTicks and speeds up (down to minIntervalTicks) as more
+      // thresholds are crossed — "the speed of damage gets faster."
+      const intervalTicks = clamp(
+        escalation.baseIntervalTicks - thresholdsCrossed,
+        escalation.minIntervalTicks,
+        escalation.baseIntervalTicks,
+      );
+
+      if (this.currentTick % intervalTicks !== 0) {
+        if (reachedNoHeal && targetHealth) {
+          this.healSuppressionFloor.set(target, targetHealth.currentValue);
+        }
+        continue;
+      }
+
       let damaged = false;
+      let dmg = 0;
       try {
-        damaged = target.applyDamage(1, {
-          cause: mc.EntityDamageCause.override,
+        // "The damage increased by +3 every 25 hearts" — an uncapped bonus
+        // on top of the base per-tick damage, scaling with how much has
+        // already been dealt to this specific target this grab.
+        const bonusDamage = thresholdsCrossed * escalation.damageBonusPerThreshold;
+
+        dmg = Math.max(
+          1,
+          calculateFinalDamage(
+            CONFIG.lockonAtk.damagePerTick + bonusDamage,
+            target,
+            CONFIG.enchantScaling.breachLevel,
+          ),
+        );
+
+        damaged = applySlasherDamage(itemStack, target, dmg, {
+          // entityAttack, not override — override bypasses the target's
+          // Resistance at the engine level unconditionally, regardless of
+          // whether the sword actually has the qualifying enchant. Letting
+          // this behave like a normal hit means applySlasherDamage's own
+          // resistance-piercing check (interaction #1 in
+          // enchant_interactions.js) is the only thing that can bypass it.
+          cause: mc.EntityDamageCause.entityAttack,
           damagingEntity: this.slasher.user,
         });
       } catch {}
 
       if (!damaged) continue;
 
+      this.cumulativeDamageDealt.set(target, cumulativeHp + dmg);
+      if (reachedNoHeal && targetHealth) {
+        this.healSuppressionFloor.set(target, targetHealth.currentValue);
+      }
+
+      applyFireAspectDebilitation(itemStack, target);
+      stampLastHitByPlayer(target, this.slasher.user.name);
+
       try {
-        target.addEffect("slowness", 40, { amplifier: 0 });
+        target.addEffect("slowness", CONFIG.lockonAtk.targetSlownessDurationTicks, {
+          amplifier: CONFIG.lockonAtk.targetSlownessAmplifier,
+        });
+        // Intentionally inert for now — see the same triggerEvent call in
+        // onTickChargedAtk above for why this is kept as-is.
         target.triggerEvent("lc:on_getting_chainsawed");
       } catch {}
 
       if (i !== 0) continue;
 
       if (this.currentTick % 2 === 0) {
-        this.slasher.addNextDurabilityDamage(1);
+        this.slasher.addNextDurabilityDamage(CONFIG.lockonAtk.durabilityDamagePerTick);
       }
 
       if (targetHealth) {
@@ -1054,25 +1325,39 @@ class LockonAtkState extends SlasherState {
 }
 
 /**
- * Slasher state for plunging attack windup.
+ * The brief rise before a ground-pound plunge: lifts the user upward for a
+ * moment (giving the pound a running start) before gravity takes over in
+ * PlungeFallState. The user is protected with Resistance/Weakness for the
+ * whole windup+fall+impact sequence so they can't be interrupted or hurt
+ * mid-plunge.
  */
 class PlungeWindupState extends SlasherState {
-  static RISE_FORCE = { x: 0, y: 1.2, z: 0 };
-  static DURATION = 7;
+  static RISE_FORCE = CONFIG.plungeWindup.riseForce;
+  static DURATION = CONFIG.plungeWindup.durationTicks;
 
   onEnter() {
-    this.slasher.user.addEffect("weakness", PlungeWindupState.DURATION + 2, {
-      amplifier: 255,
-      showParticles: false,
-    });
+    this.slasher.user.addEffect(
+      "weakness",
+      PlungeWindupState.DURATION + CONFIG.plungeWindup.weaknessExtraDurationTicks,
+      {
+        amplifier: CONFIG.plungeWindup.weaknessAmplifier,
+        showParticles: false,
+      },
+    );
 
-    this.slasher.user.addEffect("resistance", PlungeWindupState.DURATION + 5, {
-      amplifier: 255,
-      showParticles: false,
-    });
+    this.slasher.user.addEffect(
+      "resistance",
+      PlungeWindupState.DURATION + CONFIG.plungeWindup.resistanceExtraDurationTicks,
+      {
+        amplifier: CONFIG.plungeWindup.resistanceAmplifier,
+        showParticles: false,
+      },
+    );
 
     mc.system.run(() => {
-      this.slasher.user.applyImpulse(PlungeWindupState.RISE_FORCE);
+      safeInvoke("plunge-windup rise impulse", () =>
+        physics.applyImpulse(this.slasher.user, PlungeWindupState.RISE_FORCE),
+      );
     });
 
     this.slasher.playSound3DAnd2D("slasher.plunge_windup", 15, {
@@ -1080,7 +1365,7 @@ class PlungeWindupState extends SlasherState {
       pitch: 1.2,
     });
 
-    this.slasher.setCooldown("slasher_plunge_windup");
+    this.slasher.setCooldown("slasher_plunge_windup", CONFIG.cooldowns.plungeWindup);
 
     this.slasher.user.playAnimation("animation.slasher.tp.plunge_windup");
   }
@@ -1095,10 +1380,16 @@ class PlungeWindupState extends SlasherState {
 }
 
 /**
- * Slasher state for plunging attack fall.
+ * Falling phase of the ground pound: accelerates downward the longer the
+ * fall lasts (see CONFIG.plungeFall.speedBoost), so a plunge from very high
+ * up keeps getting faster all the way down instead of settling at a fixed
+ * speed. Ends the instant the user touches ground, handing off to
+ * PlungeImpactState.
  */
 class PlungeFallState extends SlasherState {
-  static FALL_FORCE = { x: 0, y: -4.4, z: 0 };
+  static FALL_FORCE = CONFIG.plungeFall.fallForce;
+  static SPEED_BOOST_INTERVAL_BLOCKS = CONFIG.plungeFall.speedBoost.intervalBlocks;
+  static SPEED_BOOST_FORCE = CONFIG.plungeFall.speedBoost.force;
 
   /**
    * @param {Slasher} slasher
@@ -1107,6 +1398,8 @@ class PlungeFallState extends SlasherState {
   constructor(slasher, startHeight) {
     super(slasher);
     this.startHeight = startHeight;
+    /** @private How many speed-boost intervals have already been applied this fall. */
+    this.boostsApplied = 0;
   }
 
   onEnter() {
@@ -1116,15 +1409,17 @@ class PlungeFallState extends SlasherState {
       volume: 1.3,
       pitch: randf(0.8, 0.9),
     });
-    this.slasher.user.applyImpulse(PlungeFallState.FALL_FORCE);
-    this.slasher.setCooldown("slasher_plunge_fall");
+    physics.applyImpulse(this.slasher.user, PlungeFallState.FALL_FORCE);
+    this.slasher.setCooldown("slasher_plunge_fall", CONFIG.cooldowns.plungeFall);
     this.slasher.user.playAnimation("animation.slasher.tp.plunge_fall");
   }
 
   onTick() {
-    if (this.currentTick % 3 === 0) {
+    if (this.currentTick % CONFIG.plungeFall.refreshEveryNTicks === 0) {
       this.addEffects();
     }
+
+    safeInvoke("plunge-fall speed boost", () => this.tickSpeedBoost());
 
     if (this.currentTick === 0) return;
 
@@ -1134,6 +1429,8 @@ class PlungeFallState extends SlasherState {
 
     const yVelocity = this.slasher.user.getVelocity().y;
 
+    // Ray distance is driven by actual fall speed, so this naturally keeps
+    // up with however fast the speed-boosts above have made the fall.
     const blockBelow = this.slasher.user.dimension.getBlockFromRay(
       this.slasher.user.location,
       vec3.DOWN,
@@ -1149,25 +1446,61 @@ class PlungeFallState extends SlasherState {
     );
   }
 
+  /**
+   * Every SPEED_BOOST_INTERVAL_BLOCKS fallen, kicks in an extra downward
+   * impulse so the plunge keeps noticeably accelerating the longer it
+   * falls, rather than leveling off at a single speed. Distance-based
+   * (not tick-based) so it stays correct regardless of how fast the user
+   * is already falling from previous boosts. Uncapped — a long enough
+   * drop keeps getting faster the whole way down, same spirit as the
+   * uncapped ground-pound damage in PlungeImpactState.
+   */
+  tickSpeedBoost() {
+    const fallenSoFar = this.startHeight - this.slasher.user.location.y;
+    if (fallenSoFar <= 0) return;
+
+    const intervalsPassed = Math.floor(
+      fallenSoFar / PlungeFallState.SPEED_BOOST_INTERVAL_BLOCKS,
+    );
+
+    if (intervalsPassed <= this.boostsApplied) return;
+
+    const newBoosts = intervalsPassed - this.boostsApplied;
+    this.boostsApplied = intervalsPassed;
+
+    for (let i = 0; i < newBoosts; i++) {
+      physics.applyImpulse(this.slasher.user, PlungeFallState.SPEED_BOOST_FORCE);
+    }
+
+    this.slasher.playSoundAtHeadFront("slasher.dash", {
+      volume: 1.0,
+      pitch: 0.6,
+    });
+  }
+
   addEffects() {
-    this.slasher.user.addEffect("resistance", 6, {
-      amplifier: 255,
+    this.slasher.user.addEffect("resistance", CONFIG.plungeFall.resistanceDurationTicks, {
+      amplifier: CONFIG.plungeFall.resistanceAmplifier,
       showParticles: false,
     });
 
-    this.slasher.user.addEffect("weakness", 10, {
-      amplifier: 255,
+    this.slasher.user.addEffect("weakness", CONFIG.plungeFall.weaknessDurationTicks, {
+      amplifier: CONFIG.plungeFall.weaknessAmplifier,
       showParticles: false,
     });
   }
 }
 
 /**
- * Slasher state for plunging attack impact.
+ * The landing hit of the ground pound: deals fall-distance-scaled damage
+ * (with a Density-style bonus, see CONFIG.enchantScaling) to everything
+ * nearby, and grants the user a brief high-amplifier Resistance pulse at the
+ * exact moment of landing so the impact itself can't register as fall
+ * damage against them.
  */
 class PlungeImpactState extends SlasherState {
-  static MIN_DEPTH_CONSIDERED_AS_HIGH = 10;
-  static CHANGE_STATE_ALLOWED_TICK = 4;
+  static MIN_DEPTH_CONSIDERED_AS_HIGH = CONFIG.plungeImpact.minDepthConsideredHigh;
+  static CHANGE_STATE_ALLOWED_TICK = CONFIG.plungeImpact.changeStateAllowedTick;
 
   /**
    * @param {Slasher} slasher
@@ -1180,8 +1513,17 @@ class PlungeImpactState extends SlasherState {
     this.fellFromHigh =
       this.fallenDepth >= PlungeImpactState.MIN_DEPTH_CONSIDERED_AS_HIGH;
 
-    this.slasher.user.addEffect("weakness", 8, {
-      amplifier: 255,
+    this.slasher.user.addEffect("weakness", CONFIG.plungeImpact.weaknessDurationTicks, {
+      amplifier: CONFIG.plungeImpact.weaknessAmplifier,
+      showParticles: false,
+    });
+
+    // A short, high-amplifier resistance tick right at the moment of landing —
+    // it's as if the sword (not the user) absorbed the impact force. Kept
+    // deliberately short so it wears off on its own almost immediately rather
+    // than lingering as a lasting buff.
+    this.slasher.user.addEffect("resistance", CONFIG.plungeImpact.landingResistanceDurationTicks, {
+      amplifier: CONFIG.plungeImpact.landingResistanceAmplifier,
       showParticles: false,
     });
   }
@@ -1200,7 +1542,9 @@ class PlungeImpactState extends SlasherState {
     const impactLocation = this.getImpactLocation();
 
     mc.system.run(() => {
-      this.hurtNearbyEntities(impactLocation);
+      safeInvoke("plunge-impact nearby damage", () =>
+        this.hurtNearbyEntities(impactLocation),
+      );
     });
 
     if (this.fellFromHigh) {
@@ -1229,7 +1573,7 @@ class PlungeImpactState extends SlasherState {
       this.slasher.playSoundAtHeadFront("slasher.critical", { volume: 1.4 });
     }
 
-    this.slasher.setCooldown("slasher_plunge_impact");
+    this.slasher.setCooldown("slasher_plunge_impact", CONFIG.cooldowns.plungeImpact);
 
     this.slasher.user.spawnParticle(
       "lc:slasher_spark_particle",
@@ -1267,8 +1611,7 @@ class PlungeImpactState extends SlasherState {
 
   /** @param {mc.Vector3} impactLocation */
   hurtNearbyEntities(impactLocation) {
-    const damage = this.calculateDamage();
-    const maxDist = clamp(2 + this.fallenDepth / 3.2, 4.0, 11);
+    const maxDist = this.calculateHitRadius();
 
     const entities = this.slasher.user.dimension.getEntities({
       location: impactLocation,
@@ -1278,14 +1621,13 @@ class PlungeImpactState extends SlasherState {
       closest: 20,
     });
 
+    const itemStack = this.slasher.userMainhandSlot.getItem();
+
     for (let i = 0; i < entities.length; i++) {
       const entity = entities[i];
 
       if (entity === this.slasher.user) continue;
-      if (entity instanceof mc.Player) {
-        if (!mc.world.gameRules.pvp) continue;
-        if (isPlayerCreativeOrSpectator(entity)) continue;
-      }
+      if (!canBeAttacked(entity)) continue;
 
       const dist = vec3.distance(entity.location, impactLocation);
 
@@ -1293,39 +1635,84 @@ class PlungeImpactState extends SlasherState {
 
       // Ray must hit for an entity that is not very close
       if (dist >= 3) {
-        const raycast1 = entity.dimension.getEntitiesFromRay(
-          impactLocation,
-          vec3.normalize(vec3.subtract(entity.location, impactLocation)),
+        const isVisible = hasLineOfSightFromAny(
+          entity.dimension,
+          [impactLocation, vec3.add(impactLocation, { x: 0, y: 2, z: 0 })],
+          entity,
+          entity.location,
+          true, // original code normalized the ray direction here
         );
 
-        // If first ray didn't hit, try again
-        if (!raycast1.some((x) => x.entity === entity)) {
-          const newOrigin = vec3.add(impactLocation, { x: 0, y: 2, z: 0 });
-          const raycast2 = entity.dimension.getEntitiesFromRay(
-            newOrigin,
-            vec3.normalize(vec3.subtract(entity.location, newOrigin)),
-          );
-          const hit = raycast2.some((x) => x.entity === entity);
-
-          if (!hit) continue;
-        }
+        if (!isVisible) continue;
       }
 
+      const damage = Math.max(
+        1,
+        calculateFinalDamage(
+          this.calculateDamage(),
+          entity,
+          CONFIG.enchantScaling.breachLevel,
+        ),
+      );
+
       try {
-        entity.applyDamage(damage, {
+        const damaged = applySlasherDamage(itemStack, entity, damage, {
           cause: mc.EntityDamageCause.maceSmash,
           damagingEntity: this.slasher.user,
         });
 
-        entity.addEffect("slowness", 70, {
-          amplifier: 1,
-        });
+        if (damaged) {
+          entity.addEffect("slowness", CONFIG.plungeImpact.targetSlownessDurationTicks, {
+            amplifier: CONFIG.plungeImpact.targetSlownessAmplifier,
+          });
+
+          applyFireAspectDebilitation(itemStack, entity);
+          stampLastHitByPlayer(entity, this.slasher.user.name);
+        }
       } catch {}
     }
   }
 
+  /**
+   * How far the ground-pound's AoE reaches: a base radius, plus a bonus
+   * every `hitRadius.perTierBlocksFallen` fallen, clamped to
+   * [hitRadius.min, hitRadius.max]. Unlike calculateDamage() below, this IS
+   * capped — see the comment on CONFIG.plungeImpact.hitRadius for why an
+   * uncapped blast radius wouldn't actually be a good idea even though the
+   * damage itself deliberately has no ceiling.
+   * @returns {number}
+   */
+  calculateHitRadius() {
+    const { base, min, max, perTierBlocksFallen, perTierBonus } =
+      CONFIG.plungeImpact.hitRadius;
+
+    const tiersReached = Math.floor(this.fallenDepth / perTierBlocksFallen);
+    const radius = base + tiersReached * perTierBonus;
+
+    return clamp(radius, min, max);
+  }
+
+  /**
+   * Base ground-pound damage plus a Density-V-style bonus (0.5 damage per
+   * block fallen, per level — same formula as the vanilla Mace's Density
+   * enchant) so the smash keeps scaling with how far the user fell.
+   * @returns {number}
+   */
   calculateDamage() {
-    return Math.round(5 * (this.fallenDepth / 4.4));
+    const base = Math.round(
+      CONFIG.plungeImpact.baseDamageMultiplier *
+        (this.fallenDepth / CONFIG.plungeImpact.fallenDepthDivisor),
+    );
+
+    const densityBonus = Math.round(
+      CONFIG.enchantScaling.densityDamagePerBlockPerLevel *
+        CONFIG.enchantScaling.densityLevel *
+        this.fallenDepth,
+    );
+
+    // No upper clamp — mirrors the vanilla Mace, which has no damage
+    // ceiling either: the further the fall, the harder the hit, forever.
+    return Math.max(base + densityBonus, CONFIG.plungeImpact.minDamage);
   }
 
   onTick() {
@@ -1339,7 +1726,7 @@ class PlungeImpactState extends SlasherState {
 
     if (this.currentTick >= 12) {
       this.slasher.changeState(new IdleState(this.slasher));
-      this.slasher.setCooldown("slasher_pick");
+      this.slasher.setCooldown("slasher_pick", CONFIG.cooldowns.pick);
     }
   }
 
