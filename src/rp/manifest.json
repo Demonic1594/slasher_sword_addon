@@ -2,17 +2,39 @@
   "format_version": 2,
   "header": {
     "description": "Resource pack of the Slasher Sword addon.",
-    "name": "Slasher Sword §cDEV§r [RP]",
+    "name": "Slasher Sword 1.8.6 [RP]",
     "uuid": "421a1dc7-7746-4dc4-a0b1-b432e36f64e2",
-    "version": [9999, 9999, 9999], // Only in DEV build
-    "min_engine_version": [1, 21, 70]
+    "version": [
+      1,
+      8,
+      6
+    ],
+    "min_engine_version": [
+      1,
+      26,
+      30
+    ]
   },
   "modules": [
     {
       "description": "Resources",
       "type": "resources",
       "uuid": "6f907df3-a5d5-49d9-8191-551295295e74",
-      "version": [0, 1, 0]
+      "version": [
+        0,
+        1,
+        0
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "uuid": "69c46a8e-1316-4070-9243-7833a57df856",
+      "version": [
+        1,
+        8,
+        6
+      ]
     }
   ]
 }
