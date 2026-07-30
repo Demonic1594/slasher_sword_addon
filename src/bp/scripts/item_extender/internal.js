@@ -1,6 +1,6 @@
 import * as mc from "@minecraft/server";
-import { ITEM_EXTENDER_PROFILE_MAP } from "./profile_registry.js";
-import { ItemExtender } from "./item_extender.js";
+import { ITEM_EXTENDER_PROFILE_MAP, ItemExtender } from "./item_extender.js";
+import { safeInvoke } from "../utils/safe.js";
 
 /**
  * @typedef {Object} ItemExtenderWrapper
@@ -60,14 +60,24 @@ function createAndWrapItemExtender(
     isUsing: () => fields.isUsing,
   });
 
+  // Guarantees the wrapper is still returned (and registered) even if
+  // onCreate() throws — but unlike a bare try/finally with the return
+  // inside finally, this actually surfaces the error instead of silently
+  // discarding it. (A `return` inside `finally` swallows any exception from
+  // the `try` block with zero trace — exactly the kind of silent failure
+  // safeInvoke exists everywhere else in this addon to prevent.)
   try {
     itemExtender.onCreate();
-  } finally {
-    return {
-      fields,
-      itemExtender,
-    };
+  } catch (e) {
+    console.warn(
+      `[ItemExtender] Unhandled error in onCreate() for "${profile.typeId}": ${e?.stack ?? e}`,
+    );
   }
+
+  return {
+    fields,
+    itemExtender,
+  };
 }
 
 /**
@@ -87,12 +97,14 @@ function removeItemExtenderWrapperEntry(user, itemExtWrapper) {
 }
 
 // Loop over all players in the world every single tick
-mc.world.afterEvents.worldInitialize.subscribe(() => {
+mc.world.afterEvents.worldLoad.subscribe(() => {
   mc.system.runInterval(() => {
     const players = mc.world.getPlayers();
     for (let i = 0; i < players.length; i++) {
       const player = players[i];
-      onTickPlayer(player);
+      safeInvoke(`tick for player "${player?.name}"`, () =>
+        onTickPlayer(player),
+      );
     }
   }, 1);
 });
@@ -146,36 +158,40 @@ function onTickPlayer(player) {
 
 // Detect when an extended item is first used
 mc.world.afterEvents.itemStartUse.subscribe((event) => {
-  const { itemStack, source } = event;
+  safeInvoke(`itemStartUse for player "${event.source?.name}"`, () => {
+    const { itemStack, source } = event;
 
-  const profile = ITEM_EXTENDER_PROFILE_MAP.get(itemStack.typeId);
-  if (!profile) return;
+    const profile = ITEM_EXTENDER_PROFILE_MAP.get(itemStack.typeId);
+    if (!profile) return;
 
-  let itemExtWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(source);
+    let itemExtWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(source);
 
-  if (!itemExtWrapper || !itemExtWrapper.itemExtender.isValid(itemStack)) {
-    removeItemExtenderWrapperEntry(source, itemExtWrapper);
-    itemExtWrapper = createAndWrapItemExtender(profile, itemStack, source);
-    ITEM_EXTENDER_WRAPPER_MAP.set(source, itemExtWrapper);
-  }
+    if (!itemExtWrapper || !itemExtWrapper.itemExtender.isValid(itemStack)) {
+      removeItemExtenderWrapperEntry(source, itemExtWrapper);
+      itemExtWrapper = createAndWrapItemExtender(profile, itemStack, source);
+      ITEM_EXTENDER_WRAPPER_MAP.set(source, itemExtWrapper);
+    }
 
-  if (!itemExtWrapper.itemExtender.isUsable(event)) return;
+    if (!itemExtWrapper.itemExtender.isUsable(event)) return;
 
-  itemExtWrapper.fields.isUsing = true;
-  itemExtWrapper.itemExtender.onStartUsing(event);
+    itemExtWrapper.fields.isUsing = true;
+    itemExtWrapper.itemExtender.onStartUsing(event);
+  });
 });
 
 // Detect when a player stopped using an extended item
 mc.world.afterEvents.itemStopUse.subscribe((event) => {
-  if (!event.itemStack) return;
+  safeInvoke(`itemStopUse for player "${event.source?.name}"`, () => {
+    if (!event.itemStack) return;
 
-  const itemExtWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(event.source);
+    const itemExtWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(event.source);
 
-  if (!itemExtWrapper) return;
-  if (!itemExtWrapper.fields.isUsing) return;
+    if (!itemExtWrapper) return;
+    if (!itemExtWrapper.fields.isUsing) return;
 
-  itemExtWrapper.fields.isUsing = false;
-  itemExtWrapper.itemExtender.onStopUsing(event);
+    itemExtWrapper.fields.isUsing = false;
+    itemExtWrapper.itemExtender.onStopUsing(event);
+  });
 });
 
 // Detect when a player used an extended item to hit an entity
@@ -184,11 +200,13 @@ mc.world.afterEvents.entityHitEntity.subscribe(
     const player = event.damagingEntity;
     if (!(player instanceof mc.Player)) return;
 
-    const advancedItemWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(player);
+    safeInvoke(`entityHitEntity for player "${player?.name}"`, () => {
+      const advancedItemWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(player);
 
-    if (!advancedItemWrapper) return;
+      if (!advancedItemWrapper) return;
 
-    advancedItemWrapper.itemExtender.onHitEntity(event);
+      advancedItemWrapper.itemExtender.onHitEntity(event);
+    });
   },
   {
     entityTypes: ["minecraft:player"],
@@ -201,11 +219,13 @@ mc.world.afterEvents.entityHitBlock.subscribe(
     const player = event.damagingEntity;
     if (!(player instanceof mc.Player)) return;
 
-    const advancedItemWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(player);
+    safeInvoke(`entityHitBlock for player "${player?.name}"`, () => {
+      const advancedItemWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(player);
 
-    if (!advancedItemWrapper) return;
+      if (!advancedItemWrapper) return;
 
-    advancedItemWrapper.itemExtender.onHitBlock(event);
+      advancedItemWrapper.itemExtender.onHitBlock(event);
+    });
   },
   {
     entityTypes: ["minecraft:player"],
@@ -216,7 +236,9 @@ mc.world.afterEvents.entityHitBlock.subscribe(
 mc.world.afterEvents.entityDie.subscribe(
   ({ deadEntity }) => {
     if (!(deadEntity instanceof mc.Player)) return;
-    removeItemExtenderWrapperEntry(deadEntity);
+    safeInvoke(`entityDie cleanup for player "${deadEntity?.name}"`, () =>
+      removeItemExtenderWrapperEntry(deadEntity),
+    );
   },
   {
     entityTypes: ["minecraft:player"],
@@ -225,5 +247,7 @@ mc.world.afterEvents.entityDie.subscribe(
 
 // Remove an item extender wrapper entry when a player exits the game
 mc.world.beforeEvents.playerLeave.subscribe(({ player }) => {
-  removeItemExtenderWrapperEntry(player);
+  safeInvoke(`playerLeave cleanup for player "${player?.name}"`, () =>
+    removeItemExtenderWrapperEntry(player),
+  );
 });
