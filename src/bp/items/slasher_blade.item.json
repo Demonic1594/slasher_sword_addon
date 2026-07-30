@@ -15,11 +15,11 @@
         }
       },
       "minecraft:glint": false,
-      "minecraft:rarity": "common",
+      "minecraft:rarity": "rare",
       "minecraft:display_name": {
         "value": "item.lc:slasher_blade.name"
       },
-      "minecraft:max_stack_size": 64,
+      "minecraft:max_stack_size": 16,
       "minecraft:damage": {
         "value": 2
       },
