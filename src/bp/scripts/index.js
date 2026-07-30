@@ -4,6 +4,7 @@
  * So, we only import other modules that do the actual stuff.
  */
 
-import "./patches/player.js";
 import "./item_extender/internal.js";
 import "./slasher/slasher.js";
+import "./slasher/enchant_interactions.js";
+import "./slasher/leaderboard.js";
