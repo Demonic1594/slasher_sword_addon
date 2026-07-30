@@ -21,7 +21,7 @@
       },
       "minecraft:max_stack_size": 1,
       "minecraft:damage": {
-        "value": 5
+        "value": 12
       },
       "minecraft:can_destroy_in_creative": {
         "value": false
@@ -31,13 +31,61 @@
           "min": 0,
           "max": 0
         },
-        "max_durability": 900
+        "max_durability": 7500
+      },
+      "minecraft:enchantable": {
+        "slot": "sword",
+        "value": 25
+      },
+      "minecraft:digger": {
+        "use_efficiency": true,
+        "destroy_speeds": [
+          {
+            "block": {
+              "tags": "q.any_tag('minecraft:is_pickaxe_item_destructible')"
+            },
+            "speed": 7
+          },
+          {
+            "block": {
+              "tags": "q.any_tag('minecraft:is_axe_item_destructible')"
+            },
+            "speed": 7
+          }
+        ]
+      },
+      "minecraft:tags": {
+        "tags": ["minecraft:is_tool", "minecraft:is_pickaxe", "minecraft:is_axe", "minecraft:diamond_tier"]
       },
       "minecraft:repairable": {
         "repair_items": [
           {
             "items": ["lc:slasher_blade"],
-            "repair_amount": 150
+            "repair_amount": "query.max_durability * 0.20"
+          },
+          {
+            "items": ["minecraft:netherite_block"],
+            "repair_amount": "query.max_durability * 0.40"
+          },
+          {
+            "items": ["minecraft:netherite_ingot"],
+            "repair_amount": "query.max_durability * 0.10"
+          },
+          {
+            "items": ["minecraft:netherite_scrap"],
+            "repair_amount": "query.max_durability * 0.05"
+          },
+          {
+            "items": ["minecraft:ancient_debris"],
+            "repair_amount": 250
+          },
+          {
+            "items": ["minecraft:mace"],
+            "repair_amount": 2000
+          },
+          {
+            "items": ["minecraft:netherite_sword"],
+            "repair_amount": 1500
           }
         ]
       },
