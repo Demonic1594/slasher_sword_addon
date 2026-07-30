@@ -32,6 +32,38 @@ import * as mc from "@minecraft/server";
  * @typedef {ArgsUserRelated & ArgsBase} Args
  */
 
+// --- Profile registry ---
+// (Merged in from the former profile_registry.js: this map and the class below
+// were always imported together by every consumer, so keeping them split across
+// two files added indirection without adding clarity.)
+
+const PROFILE_MAP = /** @type {Map<string, ItemExtenderProfile>} */ (new Map());
+
+export const ITEM_EXTENDER_PROFILE_MAP =
+  /** @type {ReadonlyMap<string, ItemExtenderProfile>} */ (PROFILE_MAP);
+
+/**
+ * Registers an item extender for an item type.
+ * @param {string} itemTypeId - The type ID of the item that will be extended.
+ * @param {CreateFn} createFn - The function that will be used to create an {@link ItemExtender} instance.
+ */
+export function registerItemExtender(itemTypeId, createFn) {
+  if (PROFILE_MAP.has(itemTypeId)) {
+    // Not a hard error — an add-on merge/reload scenario could plausibly
+    // trigger this legitimately — but silently overwriting the previous
+    // registration is exactly the kind of thing that's invisible until it
+    // isn't, so at least surface it.
+    console.warn(
+      `[ItemExtender] "${itemTypeId}" is already registered; overwriting its previous profile.`,
+    );
+  }
+
+  PROFILE_MAP.set(itemTypeId, {
+    typeId: itemTypeId,
+    create: createFn,
+  });
+}
+
 /**
  * Base class for all item extenders.
  */
@@ -57,7 +89,6 @@ export class ItemExtender {
    * @returns {number}
    */
   get currentTick() {
-    this.profile;
     return this._currentTick();
   }
 
@@ -75,10 +106,14 @@ export class ItemExtender {
    * @returns {boolean}
    */
   isValid(currentItemStack) {
-    if (!this.user.isValid()) return false;
-    if (!this.userMainhandSlot.isValid()) return false;
+    if (!this.user.isValid) return false;
 
+    // Cheapest check first: a plain number comparison that catches the
+    // common "player switched hotbar slots" case without needing to touch
+    // userMainhandSlot.isValid (a native property) at all in that case.
     if (this.user.selectedSlotIndex !== this.initialHotbarIndex) return false;
+
+    if (!this.userMainhandSlot.isValid) return false;
 
     let itemStack = currentItemStack;
 
