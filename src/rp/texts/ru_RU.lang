@@ -1,0 +1,7 @@
+item.lc:slasher.name=Рассекатель
+item.lc:slasher_blade.name=Клинок Рассекателя
+entity.lc:slasher_beam_fast_atk.name=Луч Рассекателя
+entity.lc:slasher_beam_charged_atk.name=Луч Рассекателя
+entity.lc:ground_impact_particle_spawner.name=Удар
+
+slasher.repairNeeded=§cТРЕБУЕТСЯ РЕМОНТ
