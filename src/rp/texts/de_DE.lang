@@ -1,0 +1,7 @@
+item.lc:slasher.name=Schlitzer
+item.lc:slasher_blade.name=Schlitzerklinge
+entity.lc:slasher_beam_fast_atk.name=Schlitzerstrahl
+entity.lc:slasher_beam_charged_atk.name=Schlitzerstrahl
+entity.lc:ground_impact_particle_spawner.name=Einschlag
+
+slasher.repairNeeded=§cREPARATUR ERFORDERLICH
