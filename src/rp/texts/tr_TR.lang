@@ -1,0 +1,7 @@
+item.lc:slasher.name=Slasher
+item.lc:slasher_blade.name=Slasher Kılıcı
+entity.lc:slasher_beam_fast_atk.name=Slasher Işını
+entity.lc:slasher_beam_charged_atk.name=Slasher Işını
+entity.lc:ground_impact_particle_spawner.name=Darbe
+
+slasher.repairNeeded=§cONARIM GEREKLİ

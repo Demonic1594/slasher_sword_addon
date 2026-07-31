@@ -1,7 +1,0 @@
-item.lc:slasher.name=القاطع
-item.lc:slasher_blade.name=نصل القاطع
-entity.lc:slasher_beam_fast_atk.name=شعاع القاطع
-entity.lc:slasher_beam_charged_atk.name=شعاع القاطع
-entity.lc:ground_impact_particle_spawner.name=اصطدام
-
-slasher.repairNeeded=§cيحتاج إلى إصلاح
