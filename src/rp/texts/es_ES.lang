@@ -1,0 +1,7 @@
+item.lc:slasher.name=Cortador
+item.lc:slasher_blade.name=Hoja Cortadora
+entity.lc:slasher_beam_fast_atk.name=Rayo Cortador
+entity.lc:slasher_beam_charged_atk.name=Rayo Cortador
+entity.lc:ground_impact_particle_spawner.name=Impacto
+
+slasher.repairNeeded=§cNECESITA REPARACIÓN
