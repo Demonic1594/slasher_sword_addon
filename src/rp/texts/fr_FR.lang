@@ -1,0 +1,7 @@
+item.lc:slasher.name=Trancheur
+item.lc:slasher_blade.name=Lame du Trancheur
+entity.lc:slasher_beam_fast_atk.name=Rayon Tranchant
+entity.lc:slasher_beam_charged_atk.name=Rayon Tranchant
+entity.lc:ground_impact_particle_spawner.name=Impact
+
+slasher.repairNeeded=§cRÉPARATION NÉCESSAIRE
