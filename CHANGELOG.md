@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > ## Legacy Releases
 > Versions **1.0.0** and **1.0.1** were originally developed in the **Slasher v1** repository before development continued in this repository. 
 > 
-> **Original repository:** https://github.com/lc-studios-mc/slasher-v1/tree/main
+> **Original repository:** https://github.com/lc-studios-mc/slasher-v1/
 
 ---
 
@@ -575,7 +575,7 @@ A comprehensive round of fixes resulting from an external code audit. These impr
 > [!NOTE]
 > This release belongs to the original **Slasher v1** repository.
 >
-> **Source:** https://github.com/lc-studios-mc/slasher-v1/tree/main
+> **Source:** https://github.com/lc-studios-mc/slasher-v1/
 
 ### Fixed
 
@@ -594,7 +594,7 @@ A comprehensive round of fixes resulting from an external code audit. These impr
 > [!NOTE]
 > This release belongs to the original **Slasher v1** repository.
 >
-> **Source:** https://github.com/lc-studios-mc/slasher-v1/tree/main
+> **Source:** https://github.com/lc-studios-mc/slasher-v1/
 
 ### Added
 
