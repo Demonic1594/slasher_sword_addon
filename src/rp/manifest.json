@@ -2,12 +2,12 @@
   "format_version": 2,
   "header": {
     "description": "Resource pack of the Slasher Sword addon.",
-    "name": "Slasher Sword 1.8.6 [RP]",
+    "name": "Slasher Sword 1.8.7 [RP]",
     "uuid": "421a1dc7-7746-4dc4-a0b1-b432e36f64e2",
     "version": [
       1,
       8,
-      6
+      7
     ],
     "min_engine_version": [
       1,
@@ -33,7 +33,7 @@
       "version": [
         1,
         8,
-        6
+        7
       ]
     }
   ]
