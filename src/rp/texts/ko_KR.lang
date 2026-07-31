@@ -1,0 +1,7 @@
+item.lc:slasher.name=슬래셔
+item.lc:slasher_blade.name=슬래셔 검
+entity.lc:slasher_beam_fast_atk.name=슬래셔 빔
+entity.lc:slasher_beam_charged_atk.name=슬래셔 빔
+entity.lc:ground_impact_particle_spawner.name=충격
+
+slasher.repairNeeded=§c수리가 필요합니다
