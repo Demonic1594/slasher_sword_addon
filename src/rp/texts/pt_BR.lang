@@ -1,0 +1,7 @@
+item.lc:slasher.name=Retalhador
+item.lc:slasher_blade.name=Lâmina Retalhadora
+entity.lc:slasher_beam_fast_atk.name=Raio Retalhador
+entity.lc:slasher_beam_charged_atk.name=Raio Retalhador
+entity.lc:ground_impact_particle_spawner.name=Impacto
+
+slasher.repairNeeded=§cPRECISA DE REPARO
