@@ -9,7 +9,14 @@
  *
  *   IdleState        — nothing happening; waiting for the item to be used.
  *   FastAtkState      — quick melee swing + matching beam.
- *   ChargingState     — holding the charge-attack button; charges up.
+ *   ChargingState     — holding the charge-attack button; charges up. Held
+ *                       while gliding long enough (see CONFIG.stormSlash)
+ *                       branches into Storm Slash instead on release:
+ *   StormSlashWindupState — brief windup before the flight dash.
+ *   StormSlashStrikeState — the dash itself: forward impulses, steered by
+ *                       view direction, until it ends or hits something.
+ *   StormSlashFinishState — clean mid-air ending (didn't hit anything).
+ *   StormSlashImpactState — ended by ramming into something solid.
  *   ChargedAtkState   — releases the charge: dash + swing/beam, then either
  *                       ends or (if a target is right in front) hands off to:
  *   LockonAtkState    — grabs a target and repeatedly chainsaws it in place.
@@ -29,6 +36,7 @@ import { ItemExtender, registerItemExtender } from "../item_extender/item_extend
 import {
   calculateFinalDamage,
   canBeAttacked,
+  getEntityBodyLocation,
   getEntityName,
   hasLineOfSightFromAny,
   stampLastHitByPlayer,
@@ -149,6 +157,10 @@ class Slasher extends ItemExtender {
 
   onStopUsing(event) {
     this.currentState.onStopUsing(event);
+  }
+
+  onSwing(event) {
+    this.currentState.onSwing(event);
   }
 
   onHitEntity(event) {
@@ -377,6 +389,13 @@ class SlasherState {
   onStopUsing(event) {}
 
   /**
+   * Fires on every swing, whether or not it connects with anything —
+   * alongside (not instead of) onHitEntity/onHitBlock when it does connect.
+   * @param {mc.PlayerSwingStartAfterEvent} event
+   */
+  onSwing(event) {}
+
+  /**
    * @param {mc.EntityHitEntityAfterEvent} event
    */
   onHitEntity(event) {}
@@ -417,6 +436,12 @@ class IdleState extends SlasherState {
     this.slasher.user.playSound("random.click", { pitch: 1.4, volume: 0.8 });
   }
 
+  /** @param {mc.PlayerSwingStartAfterEvent} event */
+  onSwing(event) {
+    if (event.swingSource !== mc.EntitySwingSource.Attack) return;
+    this.slasher.changeState(new FastAtkState(this.slasher));
+  }
+
   onHitEntity() {
     this.slasher.changeState(new FastAtkState(this.slasher));
   }
@@ -431,18 +456,33 @@ class IdleState extends SlasherState {
  * entities in front of the user, paired with a matching fast-attack beam.
  */
 class FastAtkState extends SlasherState {
-  static STATE_LIFESPAN_MAX = CONFIG.fastAtk.stateLifespanMaxTicks;
+  static COMBO = CONFIG.fastAtk.combo;
   static PREVENT_CHARGE_TICK = CONFIG.fastAtk.preventChargeTick;
   static COOLDOWN_MAX = CONFIG.fastAtk.cooldownMaxTicks;
   static SWING_DAMAGE = CONFIG.fastAtk.swingDamage;
 
-  ticksUntilExitState = FastAtkState.STATE_LIFESPAN_MAX;
-  cooldown = 0;
-  isNextSwingQueued = true;
-  nextAnimIndex = 0;
+  // comboIndex is carried over from the previous FastAtkState instance (see
+  // changeState calls below) so a chained swing advances the combo instead
+  // of every hit restarting at hit 1. Whiffing (state lifespan runs out
+  // without a follow-up swing) or completing hit 4 both reset it to 0.
+  //
+  // NOTE: these are set in the constructor body rather than as class-field
+  // initializers, since class fields initialize before the rest of an
+  // explicit constructor body runs — a `ticksUntilExitState = ...` field
+  // relying on `this.comboIndex` would read it before it's assigned.
+  constructor(slasher, comboIndex = 0) {
+    super(slasher);
+    this.comboIndex = comboIndex % FastAtkState.COMBO.length;
+    this.ticksUntilExitState = FastAtkState.COMBO[this.comboIndex].lifespanTicks;
+    this.cooldown = 0;
+    this.isNextSwingQueued = true;
+  }
 
   onTick() {
     if (this.ticksUntilExitState <= 0) {
+      // Whiffed the combo window — drop back to hit 1 next time, not
+      // wherever we left off.
+      this.resetAnimationCooldowns();
       this.slasher.changeState(new IdleState(this.slasher));
       return;
     }
@@ -472,6 +512,12 @@ class FastAtkState extends SlasherState {
     }
   }
 
+  /** @param {mc.PlayerSwingStartAfterEvent} event */
+  onSwing(event) {
+    if (event.swingSource !== mc.EntitySwingSource.Attack) return;
+    this.isNextSwingQueued = true;
+  }
+
   onHitEntity() {
     this.isNextSwingQueued = true;
   }
@@ -481,39 +527,33 @@ class FastAtkState extends SlasherState {
   }
 
   onStopUsing() {
+    // Hits flagged requireAttackInput (currently hit 3 and hit 4) must be
+    // queued by an actual left-click swing landing (onHitEntity/onHitBlock),
+    // not by tapping/releasing right-click mid-combo.
+    if (FastAtkState.COMBO[this.comboIndex].requireAttackInput) return;
     this.isNextSwingQueued = true;
   }
 
   resetAnimationCooldowns() {
-    this.slasher.setCooldown("slasher_fast_atk_2", 0);
-    this.slasher.setCooldown("slasher_fast_atk_1", 0);
+    for (const entry of FastAtkState.COMBO) {
+      this.slasher.setCooldown(`slasher_${entry.anim}`, 0);
+    }
   }
 
   fastAttack() {
-    this.ticksUntilExitState = FastAtkState.STATE_LIFESPAN_MAX;
+    const entry = FastAtkState.COMBO[this.comboIndex];
+
+    this.ticksUntilExitState = entry.lifespanTicks;
     this.cooldown += FastAtkState.COOLDOWN_MAX;
 
-    if (this.nextAnimIndex === 0) {
-      this.slasher.setCooldown(
-        "slasher_fast_atk_1",
-        FastAtkState.STATE_LIFESPAN_MAX,
-      );
-      this.slasher.setCooldown("slasher_fast_atk_2", 0);
+    // Only one combo-step cooldown should be "live" at a time — that's what
+    // the fp animation controller keys off of to pick which swing to show.
+    this.resetAnimationCooldowns();
+    this.slasher.setCooldown(`slasher_${entry.anim}`, entry.cooldownTicks);
 
-      this.slasher.user.playAnimation("animation.slasher.tp.fast_atk_1");
+    this.slasher.user.playAnimation(`animation.slasher.tp.${entry.anim}`);
 
-      this.nextAnimIndex = 1;
-    } else {
-      this.slasher.setCooldown(
-        "slasher_fast_atk_2",
-        FastAtkState.STATE_LIFESPAN_MAX,
-      );
-      this.slasher.setCooldown("slasher_fast_atk_1", 0);
-
-      this.slasher.user.playAnimation("animation.slasher.tp.fast_atk_2");
-
-      this.nextAnimIndex = 0;
-    }
+    const nextComboIndex = (this.comboIndex + 1) % FastAtkState.COMBO.length;
 
     this.slasher.shakeCamera(0.05, 0.09);
     this.slasher.playSoundAtHeadFront("slasher.fast_atk");
@@ -521,15 +561,21 @@ class FastAtkState extends SlasherState {
     mc.system.run(() => {
       safeInvoke("fast-atk swing (beam + nearby damage)", () => {
         shootFastAtkBeam(this.slasher.user);
-        this.swingDamageNearbyEntities();
+        this.swingDamageNearbyEntities(entry);
       });
     });
+
+    // Advance the combo for the *next* swing. This doesn't change state —
+    // onHitEntity/onHitBlock/onStopUsing above just queue another swing of
+    // the current FastAtkState instance — so we track the pending index
+    // and hand it off if/when this state is ever re-entered fresh.
+    this.comboIndex = nextComboIndex;
   }
 
-  swingDamageNearbyEntities() {
+  swingDamageNearbyEntities(entry) {
     const entities = this.slasher.user.dimension.getEntities({
       closest: 10,
-      maxDistance: CONFIG.fastAtk.swingHitboxMaxDistance,
+      maxDistance: entry.hitboxMaxDistance,
       excludeTypes: ["minecraft:item", "minecraft:xp_orb"],
       location: this.slasher.getHeadFrontLocation(),
     });
@@ -545,7 +591,7 @@ class FastAtkState extends SlasherState {
       const damage = Math.max(
         1,
         calculateFinalDamage(
-          FastAtkState.SWING_DAMAGE,
+          FastAtkState.SWING_DAMAGE * entry.damageMultiplier,
           entity,
           CONFIG.enchantScaling.breachLevel,
         ),
@@ -577,21 +623,78 @@ class FastAtkState extends SlasherState {
 class ChargingState extends SlasherState {
   static CHARGE_UI_FRAMES = CONFIG.charging.chargeUiFrames;
   static FULL_CHARGE_DURATION = this.CHARGE_UI_FRAMES.length;
+  static STORM_UI_FRAMES = CONFIG.charging.stormChargeUiFrames;
+  static STORM_READY_FRAMES = CONFIG.charging.stormReadyUiFrames;
+  static STORM_CHARGE_DURATION = CONFIG.stormSlash.chargeDurationTicks;
+  static HARD_TIMEOUT_TICKS = CONFIG.charging.hardTimeoutTicks;
+
+  constructor(slasher) {
+    super(slasher);
+
+    // Only eligible for Storm Slash if gliding for the *entire* hold, not
+    // just at the moment of release — matches the behavior this is ported
+    // from. Checked fresh every tick in onTick() and invalidated the first
+    // time it isn't true.
+    /** @private */
+    this.stormSlashEligible = this.slasher.user.isGliding;
+  }
 
   onTick() {
-    if (this.currentTick < ChargingState.FULL_CHARGE_DURATION) {
-      const text = ChargingState.CHARGE_UI_FRAMES[this.currentTick];
-
-      this.slasher.user.onScreenDisplay.setActionBar(`§c${text}`);
-    } else {
-      // Flashy colors for fully charged
-      const text =
-        ChargingState.CHARGE_UI_FRAMES[ChargingState.FULL_CHARGE_DURATION - 1];
-
-      this.slasher.user.onScreenDisplay.setActionBar(
-        (this.currentTick % 2 === 0 ? "§d" : "§b") + text,
+    // Hard timeout: unconditional, doesn't depend on isUsing at all. Added
+    // because the isUsing-based self-heal right below this can itself get
+    // stuck — its trigger condition is isUsing having already flipped to
+    // false, but the actual failure mode being guarded against here is
+    // itemStopUse not delivering *at all* while gliding, which means
+    // isUsing can stay stuck at true forever too, never tripping that
+    // check. No legitimate charge (even a full Storm Slash hold, the
+    // longest one there is) comes anywhere close to this many ticks, so
+    // reaching it at all means the release was never delivered by any
+    // means — force it now regardless of what isUsing currently reads.
+    if (this.currentTick >= ChargingState.HARD_TIMEOUT_TICKS) {
+      console.warn(
+        "[Slasher] ChargingState hard timeout: forcing a release after " +
+          `${ChargingState.HARD_TIMEOUT_TICKS} ticks with no itemStopUse ` +
+          "(isUsing was still " +
+          `${this.slasher.isUsing}).`,
       );
+      this.onStopUsing();
+      return;
     }
+
+    // Safety net: if the wrapper's own isUsing flag has already flipped to
+    // false, the normal release path (onStopUsing(), fired from the
+    // itemStopUse event handler) should already have moved us out of
+    // ChargingState entirely — reaching this line at all means that never
+    // happened. Observed specifically for an early release (before a full
+    // charge) while gliding, where the Elytra flight state appears to
+    // occasionally drop the itemStopUse dispatch itself rather than
+    // anything in this state machine failing to react to it — the charge UI
+    // and pose otherwise sit frozen indefinitely, only resolving once some
+    // *later* itemStopUse happens to go through. Rather than track down
+    // exactly why that dispatch gets dropped, treat the mismatch itself as
+    // the release the moment it's noticed, which is at most one tick later
+    // than it should have fired.
+    if (!this.slasher.isUsing) {
+      console.warn(
+        "[Slasher] ChargingState self-heal: isUsing was false but the " +
+          "state never left ChargingState — forcing the release now.",
+      );
+      this.onStopUsing();
+      return;
+    }
+
+    if (this.stormSlashEligible && !this.slasher.user.isGliding) {
+      this.stormSlashEligible = false;
+    }
+
+    if (
+      this.stormSlashEligible &&
+      this.currentTick === ChargingState.STORM_CHARGE_DURATION - 1
+    ) {
+      this.slasher.playSoundAtHeadFront("slasher.charged_storm_slash");
+    }
+
+    this.updateActionbar();
 
     if (this.currentTick === 0) {
       this.slasher.setCooldown("slasher_charging_start", CONFIG.cooldowns.chargingStart);
@@ -611,7 +714,55 @@ class ChargingState extends SlasherState {
     }
   }
 
+  updateActionbar() {
+    if (this.currentTick < ChargingState.FULL_CHARGE_DURATION) {
+      const text = ChargingState.CHARGE_UI_FRAMES[this.currentTick];
+
+      this.slasher.user.onScreenDisplay.setActionBar(`§c${text}`);
+      return;
+    }
+
+    if (this.stormSlashEligible) {
+      if (this.currentTick < ChargingState.STORM_CHARGE_DURATION) {
+        const index = Math.min(
+          ChargingState.STORM_UI_FRAMES.length - 1,
+          Math.floor(
+            (this.currentTick / ChargingState.STORM_CHARGE_DURATION) *
+              ChargingState.STORM_UI_FRAMES.length,
+          ),
+        );
+
+        this.slasher.user.onScreenDisplay.setActionBar(
+          `§c${ChargingState.STORM_UI_FRAMES[index]}`,
+        );
+        return;
+      }
+
+      const frames = ChargingState.STORM_READY_FRAMES;
+      this.slasher.user.onScreenDisplay.setActionBar(
+        frames[this.currentTick % frames.length],
+      );
+      return;
+    }
+
+    // Flashy colors for fully charged
+    const text =
+      ChargingState.CHARGE_UI_FRAMES[ChargingState.FULL_CHARGE_DURATION - 1];
+
+    this.slasher.user.onScreenDisplay.setActionBar(
+      (this.currentTick % 2 === 0 ? "§d" : "§b") + text,
+    );
+  }
+
   onStopUsing() {
+    if (
+      this.stormSlashEligible &&
+      this.currentTick >= ChargingState.STORM_CHARGE_DURATION
+    ) {
+      this.onReleaseStormSlash();
+      return;
+    }
+
     if (this.currentTick >= ChargingState.FULL_CHARGE_DURATION) {
       this.onReleaseFullCharge();
       return;
@@ -630,6 +781,11 @@ class ChargingState extends SlasherState {
     });
   }
 
+  onReleaseStormSlash() {
+    this.slasher.user.onScreenDisplay.setActionBar("§l§c< < X > >");
+    this.slasher.changeState(new StormSlashWindupState(this.slasher));
+  }
+
   onReleaseFullCharge() {
     const shouldDoPlunge =
       !this.slasher.user.isOnGround &&
@@ -639,6 +795,17 @@ class ChargingState extends SlasherState {
 
     if (shouldDoPlunge) {
       this.slasher.changeState(new PlungeWindupState(this.slasher));
+      return;
+    }
+
+    if (this.slasher.user.isGliding) {
+      // ChargedAtkState's own forward impulse would otherwise work as a
+      // free flight boost that doesn't need Storm Slash's dedicated (and
+      // more heavily gated — must stay glide-eligible for the whole hold)
+      // path. A gliding player who releases a full charge without having
+      // qualified for Storm Slash the whole time just gets nothing here,
+      // rather than silently falling back to the ground-combat dash mid-air.
+      this.slasher.changeState(new IdleState(this.slasher));
       return;
     }
 
@@ -716,6 +883,11 @@ class ChargedAtkState extends SlasherState {
   }
 
   onHitBlock() {
+    if (!this.isAfterChargedAtk) return;
+    this.slasher.changeState(new FastAtkState(this.slasher));
+  }
+
+  onSwing() {
     if (!this.isAfterChargedAtk) return;
     this.slasher.changeState(new FastAtkState(this.slasher));
   }
@@ -1073,6 +1245,13 @@ class LockonAtkState extends SlasherState {
     this.slasher.changeState(new FastAtkState(this.slasher));
   }
 
+  onSwing() {
+    if (!this.allowChangingState) return;
+    this.slasher.user.removeEffect("weakness");
+    this.slasher.user.removeEffect("resistance");
+    this.slasher.changeState(new FastAtkState(this.slasher));
+  }
+
   onTick_2() {
     const shouldStartEnding =
       this.targets.length <= 0 || !this.slasher.isSneaking();
@@ -1082,6 +1261,7 @@ class LockonAtkState extends SlasherState {
       this.slasher.playSound3DAnd2D("slasher.chainsaw.finish", 10, {
         volume: 1.2,
       });
+      this.spawnFinishEffect(this.targets);
       this.targets = [];
       return;
     }
@@ -1263,6 +1443,13 @@ class LockonAtkState extends SlasherState {
 
       if (!damaged) continue;
 
+      try {
+        this.slasher.user.dimension.spawnParticle(
+          CONFIG.lockonAtk.hitEffect.particleId,
+          getEntityBodyLocation(target),
+        );
+      } catch {}
+
       this.cumulativeDamageDealt.set(target, cumulativeHp + dmg);
       if (reachedNoHeal && targetHealth) {
         this.healSuppressionFloor.set(target, targetHealth.currentValue);
@@ -1289,6 +1476,51 @@ class LockonAtkState extends SlasherState {
       if (targetHealth) {
         this.displayEntityHealthInfo(targetHealth);
       }
+    }
+  }
+
+  /**
+   * Purely cosmetic release flourish: a bigger blood-burst particle on
+   * every released target, plus a staggered camera-shake + critical-hit
+   * sound + sparkle particle on the first few (so a multi-target release
+   * reads as a rapid one-two-three rather than everything firing at once).
+   * No damage is dealt here — the actual damage already happened tick by
+   * tick in onTickChainsawing.
+   * @param {mc.Entity[]} targets
+   */
+  spawnFinishEffect(targets) {
+    const { finishEffect } = CONFIG.lockonAtk;
+
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      if (!target.isValid) continue;
+
+      const bodyLoc = getEntityBodyLocation(target);
+
+      try {
+        this.slasher.user.dimension.spawnParticle(
+          finishEffect.particleId,
+          bodyLoc,
+        );
+      } catch {}
+
+      if (i >= finishEffect.maxStaggeredTargets) continue;
+
+      const delayTicks = i * finishEffect.staggerDelayTicksPerTarget;
+
+      mc.system.runTimeout(() => {
+        try {
+          this.slasher.shakeCamera(0.08, 0.08);
+          this.slasher.user.playSound("slasher.critical", {
+            volume: 1,
+            pitch: randf(0.85, 1.1),
+          });
+          this.slasher.user.dimension.spawnParticle(
+            finishEffect.sparkleParticleId,
+            bodyLoc,
+          );
+        } catch {}
+      }, delayTicks);
     }
   }
 
@@ -1738,5 +1970,274 @@ class PlungeImpactState extends SlasherState {
   onHitBlock() {
     if (this.currentTick < PlungeImpactState.CHANGE_STATE_ALLOWED_TICK) return;
     this.slasher.changeState(new FastAtkState(this.slasher));
+  }
+
+  onSwing() {
+    if (this.currentTick < PlungeImpactState.CHANGE_STATE_ALLOWED_TICK) return;
+    this.slasher.changeState(new FastAtkState(this.slasher));
+  }
+}
+
+/**
+ * Storm Slash, part 1/4: a brief windup once ChargingState hands off (see
+ * ChargingState.onReleaseStormSlash). Purely a beat before the dash — no
+ * movement here, just camera feel + sound + waiting to confirm the player
+ * is still gliding when the windup ends.
+ */
+class StormSlashWindupState extends SlasherState {
+  static DURATION_TICKS = CONFIG.stormSlash.windup.durationTicks;
+
+  onEnter() {
+    this.slasher.shakeCamera(
+      CONFIG.stormSlash.windup.cameraShake.intensity,
+      CONFIG.stormSlash.windup.cameraShake.seconds,
+    );
+    this.slasher.setCooldown(
+      "slasher_storm_slash_windup",
+      CONFIG.cooldowns.stormSlashWindup,
+    );
+    this.slasher.playSound3DAnd2D("slasher.storm_slash_windup", 15, {
+      volume: 1.5,
+    });
+  }
+
+  onTick() {
+    if (this.currentTick < StormSlashWindupState.DURATION_TICKS) return;
+
+    if (this.slasher.user.isGliding) {
+      this.slasher.changeState(new StormSlashStrikeState(this.slasher));
+      return;
+    }
+
+    // Stopped gliding partway through the windup — nothing to dash off of,
+    // so cancel back to idle instead of launching a flight move with no
+    // Elytra deployed.
+    this.slasher.setCooldown("slasher_pick", CONFIG.cooldowns.pick);
+    this.slasher.changeState(new IdleState(this.slasher));
+  }
+}
+
+/**
+ * Storm Slash, part 2/4: the flight dash itself. An initial forward burst
+ * on entry, then every tick a smaller continuous correction that steers
+ * back toward the player's current view direction — see
+ * createContinuousForce(). Ends either by running out the clock (a clean
+ * finish) or by shouldImpact() detecting the player has stopped gliding,
+ * slowed to a near-stop, or is about to hit a solid block.
+ *
+ * Deals no direct damage — see the CONFIG.stormSlash doc comment. Whatever
+ * gets rammed on the way takes whatever knockback/collision the forced
+ * movement itself causes, nothing more.
+ */
+class StormSlashStrikeState extends SlasherState {
+  static CFG = CONFIG.stormSlash.strike;
+
+  onEnter() {
+    this.applyConstantEffect();
+
+    const force = vec3.changeDir(
+      { x: 0, y: 0, z: StormSlashStrikeState.CFG.initialImpulseMagnitude },
+      this.slasher.user.getViewDirection(),
+    );
+    mc.system.run(() => {
+      // The native applyImpulse, NOT physics.applyImpulse. physics.js's
+      // wrapper goes through Player.applyKnockback specifically because raw
+      // applyImpulse causes visible rubber-banding for normal, grounded
+      // player movement (client/server reconciliation fighting the
+      // server-set velocity) — but knockback is also the mechanic vanilla
+      // dampens while an Elytra is deployed, to stop PVP knockback-canceling
+      // glide combos. Route a flight boost through it and the horizontal
+      // component gets silently suppressed by that same anti-abuse
+      // dampening, leaving only a vertical nudge — exactly this bug. Gliding
+      // isn't normal grounded movement, so the rubber-banding concern
+      // doesn't apply here; this is also what the source this was ported
+      // from (v4-1) actually calls for this exact move.
+      safeInvoke("storm slash initial impulse", () =>
+        this.slasher.user.applyImpulse(force),
+      );
+    });
+
+    this.slasher.shakeCamera(
+      StormSlashStrikeState.CFG.cameraShake.intensity,
+      StormSlashStrikeState.CFG.cameraShake.seconds,
+    );
+    this.slasher.setCooldown(
+      "slasher_storm_slash_strike",
+      CONFIG.cooldowns.stormSlashStrike,
+    );
+    this.slasher.playSound3DAnd2D("slasher.storm_slash_strike", 15, {
+      volume: 1.5,
+      pitch: randf(0.94, 1.03),
+    });
+  }
+
+  onTick() {
+    if (this.currentTick >= StormSlashStrikeState.CFG.maxDurationTicks) {
+      this.slasher.changeState(new StormSlashFinishState(this.slasher));
+      return;
+    }
+
+    if (this.shouldImpact()) {
+      this.slasher.changeState(new StormSlashImpactState(this.slasher));
+      return;
+    }
+
+    this.applyConstantEffect();
+
+    const force = this.createContinuousForce();
+    safeInvoke("storm slash continuous impulse", () =>
+      this.slasher.user.applyImpulse(force),
+    );
+
+    this.slasher.shakeCamera(
+      StormSlashStrikeState.CFG.continuousCameraShake.intensity,
+      StormSlashStrikeState.CFG.continuousCameraShake.seconds,
+    );
+  }
+
+  /**
+   * Resistance + Weakness at max amplifier, refreshed every tick rather
+   * than applied once for the whole state — same trick
+   * PlungeWindupState/PlungeImpactState use so the forced movement (and
+   * ramming into things) can't hurt the user, and stray vanilla punch
+   * damage can't happen while they're being flung around.
+   */
+  applyConstantEffect() {
+    const cfg = StormSlashStrikeState.CFG;
+    this.slasher.user.addEffect("resistance", cfg.effectDurationTicks, {
+      amplifier: cfg.effectAmplifier,
+      showParticles: false,
+    });
+    this.slasher.user.addEffect("weakness", cfg.effectDurationTicks, {
+      amplifier: cfg.effectAmplifier,
+      showParticles: false,
+    });
+  }
+
+  /**
+   * The dash doesn't just fly in a fixed direction from the initial burst —
+   * every tick it corrects back toward wherever the player is currently
+   * looking, weighted by how far off their current velocity already is
+   * from that look direction (a bigger gap between the two means a bigger
+   * correction). This is what makes the dash "steerable" while it's
+   * in progress.
+   * @returns {mc.Vector3}
+   */
+  createContinuousForce() {
+    const cfg = StormSlashStrikeState.CFG;
+    const viewDir = this.slasher.user.getViewDirection();
+    const currentVelocity = this.slasher.user.getVelocity();
+    const velocityNorm = vec3.normalize(currentVelocity);
+    const angle = Math.acos(clamp(vec3.dot(velocityNorm, viewDir), -1, 1));
+    const forwardForce = Math.max(
+      cfg.continuousImpulseMin,
+      angle / cfg.continuousImpulseAngleDivisor,
+    );
+
+    const target = vec3.changeDir({ x: 0, y: 0, z: forwardForce }, viewDir);
+
+    return target;
+  }
+
+  shouldImpact() {
+    const cfg = StormSlashStrikeState.CFG;
+
+    if (!this.slasher.user.isGliding) return true;
+
+    const velocityLen = vec3.length(this.slasher.user.getVelocity());
+    if (velocityLen < cfg.minVelocityForContinue) return true;
+
+    const searchDist = Math.max(cfg.minBlockSearchDistance, velocityLen);
+    const block = this.slasher.user.getBlockFromViewDirection({
+      maxDistance: searchDist,
+      includeLiquidBlocks: false,
+      includePassableBlocks: false,
+    });
+
+    return block !== undefined;
+  }
+}
+
+/**
+ * Storm Slash, part 3/4a: a clean ending — the dash ran its full course
+ * without hitting anything. No dedicated fp/tp animation for this state (it
+ * doesn't exist in the source this is ported from either): the strike
+ * animation's own cooldown is sized to stay active through this whole
+ * window too (see CONFIG.cooldowns.stormSlashStrike), so the controller
+ * just holds the strike pose on its last frame while this plays out.
+ */
+class StormSlashFinishState extends SlasherState {
+  static DURATION_TICKS = CONFIG.stormSlash.finish.durationTicks;
+  static CHANGE_STATE_ALLOWED_TICK = 4;
+
+  onEnter() {
+    this.slasher.playSound3DAnd2D("slasher.storm_slash_finish", 15, {
+      volume: 1.3,
+      pitch: 1.04,
+    });
+  }
+
+  onTick() {
+    if (
+      this.currentTick >= StormSlashFinishState.CHANGE_STATE_ALLOWED_TICK &&
+      this.slasher.isUsing
+    ) {
+      this.slasher.changeState(new ChargingState(this.slasher));
+      return;
+    }
+
+    if (this.currentTick < StormSlashFinishState.DURATION_TICKS) return;
+    this.exit();
+  }
+
+  exit() {
+    this.slasher.setCooldown("slasher_pick", CONFIG.cooldowns.pick);
+    this.slasher.changeState(new IdleState(this.slasher));
+  }
+}
+
+/**
+ * Storm Slash, part 3/4b: ended by ramming into something solid instead of
+ * finishing clean. tryTeleport-ing the player to their own current location
+ * on the first tick is a standard Bedrock trick for an instant, hard stop —
+ * teleporting to where you already are zeroes out momentum immediately,
+ * rather than letting the flight velocity bleed off naturally.
+ */
+class StormSlashImpactState extends SlasherState {
+  static DURATION_TICKS = CONFIG.stormSlash.impact.durationTicks;
+  static CHANGE_STATE_ALLOWED_TICK = 4;
+
+  onEnter() {
+    this.slasher.setCooldown(
+      "slasher_storm_slash_impact",
+      CONFIG.cooldowns.stormSlashImpact,
+    );
+    this.slasher.playSound3DAnd2D("slasher.storm_slash_impact", 18, {
+      volume: 1.6,
+    });
+  }
+
+  onTick() {
+    if (this.currentTick === 1) {
+      safeInvoke("storm slash impact velocity reset", () =>
+        this.slasher.user.tryTeleport(this.slasher.user.location),
+      );
+    }
+
+    if (
+      this.currentTick >= StormSlashImpactState.CHANGE_STATE_ALLOWED_TICK &&
+      this.slasher.isUsing
+    ) {
+      this.slasher.changeState(new ChargingState(this.slasher));
+      return;
+    }
+
+    if (this.currentTick < StormSlashImpactState.DURATION_TICKS) return;
+    this.exit();
+  }
+
+  exit() {
+    this.slasher.setCooldown("slasher_pick", CONFIG.cooldowns.pick);
+    this.slasher.changeState(new IdleState(this.slasher));
   }
 }
