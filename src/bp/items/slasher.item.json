@@ -44,13 +44,13 @@
             "block": {
               "tags": "q.any_tag('minecraft:is_pickaxe_item_destructible')"
             },
-            "speed": 7
+            "speed": 4
           },
           {
             "block": {
               "tags": "q.any_tag('minecraft:is_axe_item_destructible')"
             },
-            "speed": 7
+            "speed": 8
           }
         ]
       },
