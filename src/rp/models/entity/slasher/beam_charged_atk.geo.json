@@ -1,34 +1,140 @@
 {
-	"format_version": "1.12.0",
-	"minecraft:geometry": [
-		{
-			"description": {
-				"identifier": "geometry.slasher_beam_charged_atk",
-				"texture_width": 48,
-				"texture_height": 24,
-				"visible_bounds_width": 3,
-				"visible_bounds_height": 1.5,
-				"visible_bounds_offset": [0, 0.25, 0]
-			},
-			"bones": [
-				{
-					"name": "xy",
-					"pivot": [0, 0, 0]
-				},
-				{
-					"name": "z",
-					"parent": "xy",
-					"pivot": [0, 0, 0],
-					"cubes": [
-						{"origin": [-12, 0, -12], "size": [24, 0, 24], "uv": [-24, 0]}
-					],
-					"locators": {
-						"trail_1": [11.5, 0, 7.5],
-						"trail_2": [-11.5, 0, 7.5],
-						"trail_3": [0, 0, 9.5]
-					}
-				}
-			]
-		}
-	]
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.slasher_beam_charged_atk",
+        "texture_width": 64,
+        "texture_height": 64,
+        "visible_bounds_width": 3,
+        "visible_bounds_height": 3,
+        "visible_bounds_offset": [
+          0,
+          0.5,
+          0
+        ]
+      },
+      "bones": [
+        {
+          "name": "yaw",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "pitch",
+          "parent": "yaw",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "roll",
+          "parent": "pitch",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -16,
+                0,
+                -16
+              ],
+              "size": [
+                32,
+                0,
+                32
+              ],
+              "uv": {
+                "north": {
+                  "uv": [
+                    0,
+                    0
+                  ],
+                  "uv_size": [
+                    32,
+                    0
+                  ]
+                },
+                "east": {
+                  "uv": [
+                    0,
+                    0
+                  ],
+                  "uv_size": [
+                    32,
+                    0
+                  ]
+                },
+                "south": {
+                  "uv": [
+                    0,
+                    0
+                  ],
+                  "uv_size": [
+                    32,
+                    0
+                  ]
+                },
+                "west": {
+                  "uv": [
+                    0,
+                    0
+                  ],
+                  "uv_size": [
+                    32,
+                    0
+                  ]
+                },
+                "up": {
+                  "uv": [
+                    0,
+                    0
+                  ],
+                  "uv_size": [
+                    32,
+                    32
+                  ]
+                },
+                "down": {
+                  "uv": [
+                    0,
+                    64
+                  ],
+                  "uv_size": [
+                    32,
+                    -32
+                  ]
+                }
+              }
+            }
+          ],
+          "locators": {
+            "beam_trail_locator_1": [
+              13,
+              0,
+              4
+            ],
+            "beam_trail_locator_2": [
+              -13,
+              0,
+              4
+            ],
+            "beam_trail_locator_3": [
+              0,
+              0,
+              -2
+            ]
+          }
+        }
+      ]
+    }
+  ]
 }
