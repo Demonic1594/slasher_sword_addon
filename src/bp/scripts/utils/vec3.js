@@ -135,6 +135,16 @@ function cross(vec1, vec2) {
 }
 
 /**
+ * Computes the dot product of two vectors.
+ * @param {Vector3} vecA First vector
+ * @param {Vector3} vecB Second vector
+ * @returns {number}
+ */
+export function dot(vecA, vecB) {
+  return vecA.x * vecB.x + vecA.y * vecB.y + vecA.z * vecB.z;
+}
+
+/**
  * Changes vector direction while preserving magnitude.
  * @param {Vector3} vec Vector to change
  * @param {Vector3} dir New direction
