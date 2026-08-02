@@ -14,13 +14,22 @@
       },
       "animations": {
         // Animations
-        "anim.general": "animation.slasher_beam_charged_atk.general",
+        "anim.base_rotation": "animation.slasher_beam_charged_atk.base_rotation",
+        "anim.spin": "animation.slasher_beam_charged_atk.spin",
         "anim.trail": "animation.slasher_beam_charged_atk.trail"
       },
       "scripts": {
-        "scale": "1.15",
+        // Matches the source model's own approach: scaled to nothing until
+        // lc:is_visible flips true (beam.js sets this ~2 ticks after spawn,
+        // once its travel velocity is confirmed), rather than only gating
+        // the trail particles like the old xy/z beam did. Keeps the beam
+        // from flashing into view at its spawn point for those first ticks.
+        "scale": "v.is_visible ? 1.15 : 0",
         "animate": [
-          "anim.general",
+          "anim.base_rotation",
+          {
+            "anim.spin": "v.is_visible"
+          },
           {
             "anim.trail": "v.is_visible"
           }
