@@ -2,12 +2,12 @@
   "format_version": 2,
   "header": {
     "description": "The Slasher is a chainsaw-sword with a spectacle combat experience.",
-    "name": "Slasher Sword 1.8.7 [BP]",
+    "name": "Slasher Sword 1.8.22 [BP]",
     "uuid": "69c46a8e-1316-4070-9243-7833a57df856",
     "version": [
       1,
       8,
-      7
+      22
     ],
     "min_engine_version": [
       1,
@@ -21,9 +21,9 @@
       "type": "data",
       "uuid": "17a8085a-164a-4271-a854-351313d78d95",
       "version": [
-        0,
         1,
-        0
+        8,
+        19
       ]
     },
     {
@@ -32,9 +32,9 @@
       "type": "script",
       "uuid": "f54996d6-0bb5-44e7-9374-e985dacab070",
       "version": [
-        0,
         1,
-        0
+        8,
+        19
       ],
       "entry": "scripts/index.js"
     }
@@ -45,7 +45,7 @@
       "version": [
         1,
         8,
-        7
+        22
       ]
     },
     {
