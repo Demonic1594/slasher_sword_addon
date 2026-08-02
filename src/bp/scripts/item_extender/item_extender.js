@@ -163,6 +163,18 @@ export class ItemExtender {
   onStopUsing(event) {}
 
   /**
+   * Called when the user swings the item, regardless of whether the swing
+   * connects with anything. Fires alongside (not instead of) onHitEntity /
+   * onHitBlock when a swing does connect — both firing for the same swing
+   * is expected and safe as long as extender implementations treat this as
+   * a "the user attacked" signal rather than something with its own
+   * one-shot side effects.
+   * @param {mc.PlayerSwingStartAfterEvent} event
+   * @returns {void}
+   */
+  onSwing(event) {}
+
+  /**
    * Called when the user hits an entity using the item.
    * @param {mc.EntityHitEntityAfterEvent} event
    * @returns {void}
