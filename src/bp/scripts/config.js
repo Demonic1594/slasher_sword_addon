@@ -69,6 +69,12 @@ export const CONFIG = {
     plungeWindup: 2, // slasher_plunge_windup
     plungeFall: 2, // slasher_plunge_fall
     plungeImpact: 2, // slasher_plunge_impact
+    stormSlashWindup: 2, // slasher_storm_slash_windup
+    // Deliberately long: this is what keeps the fp/tp controllers showing the
+    // strike pose for the whole strike+finish window when the dash ends
+    // clean (no impact) — see StormSlashStrikeState/StormSlashFinishState.
+    stormSlashStrike: 42, // slasher_storm_slash_strike
+    stormSlashImpact: 2, // slasher_storm_slash_impact
   },
 
   fastAtk: {
@@ -80,11 +86,96 @@ export const CONFIG = {
     preventChargeTick: 9,
     cooldownMaxTicks: 2,
     durabilityDamagePerHit: 1,
+
+    // 4-hit combo chain. `anim` matches the animation.slasher.tp.<anim> /
+    // animation.slasher.fp.<anim> identifiers and is also used to build the
+    // per-hit cooldown category key ("slasher_<anim>") that the RP
+    // attachable + fp animation controller key off of.
+    // lifespanTicks is how long the state waits for the next chained swing
+    // before dropping the combo back to hit 1 — sized a bit above each
+    // animation's own length (20 ticks/sec) so a well-timed follow-up input
+    // isn't eaten by the state exiting first.
+    // requireAttackInput (optional, defaults to falsy) restricts which input
+    // is allowed to queue *this* combo step's swing: normally a genuine
+    // attack input (onSwing, or a left-click hit via onHitEntity/onHitBlock)
+    // or releasing right-click mid-combo (onStopUsing) will do it, but a
+    // step with requireAttackInput: true can only be queued by an actual
+    // attack (onSwing/onHitEntity/onHitBlock) — see FastAtkState.onStopUsing().
+    combo: [
+      {
+        anim: "fast_atk_1",
+        damageMultiplier: 1,
+        hitboxMaxDistance: 2.2,
+        lifespanTicks: 15,
+        cooldownTicks: 15, // fp anim is 10 ticks; unchanged from original behavior
+      },
+      {
+        anim: "fast_atk_2",
+        damageMultiplier: 1,
+        hitboxMaxDistance: 2.2,
+        lifespanTicks: 15,
+        cooldownTicks: 15, // fp anim is 10 ticks; unchanged from original behavior
+      },
+      {
+        anim: "overhead_chop",
+        damageMultiplier: 1.3,
+        hitboxMaxDistance: 2.6,
+        lifespanTicks: 26,
+        cooldownTicks: 19, // fp anim is 0.95s = 19 ticks (recovery lengthened for a natural ease-out)
+        requireAttackInput: true, // hit 3 — left-click only, not a right-click release
+      },
+      {
+        anim: "two_handed_cleave",
+        damageMultiplier: 1.6,
+        hitboxMaxDistance: 3.0,
+        lifespanTicks: 29,
+        cooldownTicks: 21, // fp anim is 1.05s = 21 ticks (recovery lengthened for a natural ease-out)
+        requireAttackInput: true, // hit 4 — left-click only, not a right-click release
+      },
+    ],
   },
 
   charging: {
     // Number of UI frames also defines how many ticks a full charge takes.
     chargeUiFrames: [">    X    <", ">   X   <", ">  X  <", "> X <", ">X<"],
+
+    // Shown instead of the frames above once ChargingState.stormSlashEligible
+    // (holding the charge while gliding) passes the normal full-charge point.
+    // Number of frames doesn't have to (and doesn't) match
+    // stormSlash.chargeDurationTicks — see ChargingState.getStormFrame(),
+    // which indexes into this proportionally.
+    stormChargeUiFrames: [
+      ">               >X<               <",
+      ">              >X<              <",
+      ">             >X<             <",
+      ">            >X<            <",
+      ">           >X<           <",
+      ">          >X<          <",
+      ">         >X<         <",
+      ">        >X<        <",
+      ">       >X<       <",
+      ">      >X<      <",
+      ">     >X<     <",
+      ">    >X<    <",
+      ">   >X<   <",
+      ">  >X<  <",
+      "> >X< <",
+      ">>X<<",
+    ],
+    // Cycled through once storm-slash charge is complete, for the same
+    // flashing-ready effect the normal charge gets (just a 3-color cycle
+    // here instead of 2, and bold, to read as the bigger payoff it is).
+    stormReadyUiFrames: ["§l§b>>X<<", "§l§d>>X<<", "§l§e>>X<<"],
+
+    // Unconditional safety net: no legitimate hold should ever need to run
+    // this long — even the Storm Slash charge window (stormSlash.
+    // chargeDurationTicks, 30 ticks / 1.5s) plus a very generous margin for
+    // reaction time comes nowhere close. If ChargingState is somehow still
+    // active past this point, itemStopUse never delivered the release (the
+    // exact failure the self-heal in ChargingState.onTick() also exists
+    // for) — force it regardless of isUsing, so charging can never get
+    // stuck indefinitely no matter what upstream event delivery does.
+    hardTimeoutTicks: 200,
   },
 
   dash: {
@@ -201,6 +292,35 @@ export const CONFIG = {
       // Health) is suppressed for the rest of the grab.
       noHealThresholdHearts: 75,
       noHealWitherAmplifier: 2,
+    },
+
+    /**
+     * Visual/audio feedback on the locked-on target(s) — ported from the
+     * "v4-1" build's blood-burst effect, reimplemented here with our own
+     * particle identifiers (lc:slasher_chainsaw_*). Purely cosmetic: no
+     * damage is dealt by any of this, it just accompanies damage that
+     * onTickChainsawing/onTick_2 already apply on their own.
+     */
+    hitEffect: {
+      // Small burst spawned at the target's body location on every tick a
+      // hit actually lands (piggybacks on the same damage-success check as
+      // everything else in the loop).
+      particleId: "lc:slasher_chainsaw_hit_emitter",
+    },
+    finishEffect: {
+      // Bigger burst spawned once per released target when the grab ends
+      // (right where onTick_2 already clears this.targets).
+      particleId: "lc:slasher_chainsaw_finish_emitter",
+      sparkleParticleId: "lc:slasher_chainsaw_sparkle_emitter",
+      // Only the first N released targets get the staggered camera-shake +
+      // sound + sparkle flourish (matching v4-1's own cap) — avoids a wall
+      // of simultaneous sound/shake if a grab ever nets an unusually large
+      // number of targets.
+      maxStaggeredTargets: 5,
+      // Each staggered target's flourish is delayed by its index in ticks
+      // (target 0 immediate, target 1 one tick later, ...), so multi-target
+      // releases read as a rapid one-two-three rather than all at once.
+      staggerDelayTicksPerTarget: 1,
     },
   },
 
@@ -336,11 +456,80 @@ export const CONFIG = {
      * perTierBlocksFallen) * perTierBonus, min, max).
      */
     hitRadius: {
-      base: 12, // was a hardcoded 11
+      // Old formula was clamp(2 + fallenDepth/3.2, 4, 11) — a straight-line
+      // scale capped at 11 blocks no matter how far the fall. This tiered
+      // formula starts higher (12) and, given enough fall distance, reaches
+      // nearly 4x that old ceiling (40) — a deliberate, large increase, not
+      // a minor tweak.
+      base: 12,
       min: 4,
       perTierBlocksFallen: 25,
       perTierBonus: 1.5,
       max: 40,
+    },
+  },
+
+  /**
+   * Ported from the "v4-1" build's Storm Slash: hold the charge-attack
+   * button while gliding (Elytra deployed) for chargeDurationTicks, then
+   * release while still gliding to launch into a flight dash — windup, then
+   * a forward-impulse strike phase that steers with view direction, ending
+   * either in a clean mid-air finish or an impact if something solid gets
+   * in the way. See ChargingState / StormSlashWindupState /
+   * StormSlashStrikeState / StormSlashFinishState / StormSlashImpactState.
+   *
+   * The source has no scripted damage anywhere in this move — it's a pure
+   * traversal/mobility ability (impulses + self-buffs + sound/camera feel),
+   * not an attack in the damage-dealing sense. Ported as such.
+   */
+  stormSlash: {
+    // Must hold the charge button while gliding for this long (from the
+    // moment charging starts) before releasing triggers Storm Slash instead
+    // of the normal charged attack. Much longer than charging.chargeUiFrames
+    // (5 ticks) on purpose — this is the bigger payoff, so it asks for a
+    // deliberate hold, not just however long the normal charge already
+    // takes. Gliding has to hold for the *entire* duration, not just at the
+    // moment of release — see ChargingState.stormSlashEligible.
+    chargeDurationTicks: 30,
+
+    windup: {
+      durationTicks: 16,
+      cameraShake: { intensity: 0.04, seconds: 0.3 },
+    },
+
+    strike: {
+      // Hard cap on how long the dash can last if it never hits anything
+      // and never stops gliding (shouldImpact() keeps checking every tick;
+      // this is just the backstop).
+      maxDurationTicks: 20,
+      // One-time forward burst on entry, then a smaller continuous
+      // correction every tick afterwards — see createInitialImpulse() /
+      // createContinuousImpulse().
+      initialImpulseMagnitude: 3,
+      continuousImpulseMin: 0.1,
+      continuousImpulseAngleDivisor: 1.3,
+      cameraShake: { intensity: 0.1, seconds: 0.04 },
+      continuousCameraShake: { intensity: 0.08, seconds: 0.05 },
+      // Resistance + Weakness at max amplifier for the whole strike, same
+      // trick PlungeWindupState/PlungeImpactState use — the forced movement
+      // (and ramming into things) can't hurt the user, and they can't deal
+      // stray vanilla punch damage while being flung around. Refreshed
+      // every tick rather than applied once for durationTicks, so it can
+      // never expire mid-dash even if the state runs long.
+      effectAmplifier: 255,
+      effectDurationTicks: 12,
+      // A block detected within this minimum search distance always counts
+      // as "about to hit it," even at very low speed.
+      minBlockSearchDistance: 1,
+      minVelocityForContinue: 0.1,
+    },
+
+    finish: {
+      durationTicks: 20,
+    },
+
+    impact: {
+      durationTicks: 20,
     },
   },
 };
