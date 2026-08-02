@@ -11,6 +11,459 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.8.22]
+
+### Fixed
+
+- Fix: RP<->BP manifest dependency mismatch. The RP has its own reverse
+  dependency on the BP (in addition to the BP's existing dependency on the
+  RP) that was still pinned to 1.8.20 while everything else had moved to
+  1.8.21 — same class of bug as the earlier one-directional version, just
+  never caught in this direction before now. Both directions are now kept
+  in lockstep on every version bump.
+- Fix: three states — ChargedAtkState's post-attack window, LockonAtkState's
+  ending window, and PlungeImpactState — had onHitEntity/onHitBlock
+  (chaining a landed hit into a fresh FastAtkState) but were missing the
+  matching onSwing, so an air-swing from those specific windows didn't
+  chain into a combo the way a landed hit already did. Re-added, matching
+  IdleState and FastAtkState's own combo queue, which already had it.
+- Fix: added an unconditional hard-timeout safety net to ChargingState
+  (CONFIG.charging.hardTimeoutTicks, 200 ticks), ahead of the existing
+  isUsing-based self-heal. Root cause of the still-reported stuck-charging
+  bug: isUsing itself can apparently get stuck at true forever (not just
+  "flips false but goes unnoticed," which is what the existing self-heal
+  was built to catch) — meaning that self-heal's own trigger condition
+  could never fire either. The new check doesn't read isUsing at all: no
+  legitimate hold, including a full Storm Slash charge, comes anywhere
+  close to 200 ticks, so reaching it is itself the signal to force a
+  release, regardless of what isUsing currently reports.
+
+### Investigated
+
+- Investigated further, not resolved: playerSwingStart still not firing
+  for a true air-swing (confirmed again on this build). InputButton (the
+  only way to poll input state directly, as an alternative to relying on
+  the event) only exposes Jump and Sneak per Microsoft's own docs — there
+  is no Attack/Use entry to poll instead, so there's no independent way to
+  verify or work around this from script. This still looks like current
+  engine behavior rather than anything on our end.
+
+---
+
+## [1.8.21]
+
+### Fixed
+
+- Fix: charging while gliding could get permanently stuck (frozen charging
+  pose, action bar never clearing) on an early release (before reaching a
+  full Storm Slash charge). Root cause: the itemStopUse handler had an
+  `if (!event.itemStack) return;` guard that, when event.itemStack came
+  back empty (observed specifically on early release while gliding), bailed
+  out before ever resetting the wrapper's isUsing flag back to false —
+  which is also exactly what silently defeated ChargingState's own
+  self-heal check, since that check's trigger condition (isUsing already
+  false) could never become true in the first place. Nothing downstream
+  ever reads event.itemStack from onStopUsing, so the guard wasn't
+  protecting anything — removed it; isUsing now always resets on
+  itemStopUse regardless of whether the event carried a valid itemStack.
+- Investigated: playerSwingStart firing only on a connecting swing (block
+  or entity), never on a genuine swing-at-nothing, per direct testing.
+  Confirmed via Microsoft's docs that PlayerSwingEventOptions (the only
+  filter this event's subscribe() accepts) only filters by held-item and
+  swing source — nothing that could explain a hit-vs-miss difference — so
+  this isn't a subscription misconfiguration on our end. Given the API's
+  own recent changelog history includes at least one prior fix specifically
+  to when this event triggers, this looks like current engine behavior
+  (possibly still settling) rather than anything fixable from script.
+  Leaving the subscription in place as-is: harmless if it never fires for
+  true air-swings, and it'll start working automatically if a future game
+  version's behavior changes to match the documented "any swing" intent.
+
+---
+
+## [1.8.20]
+
+### Fixed
+
+- Bug fix: IdleState.onSwing and FastAtkState.onSwing were reacting to
+  EVERY playerSwingStart event regardless of event.swingSource. That event
+  fires for far more than attacks — per @minecraft/server's own
+  EntitySwingSource enum it also covers Build, DropItem, Event, Interact,
+  Mine, None, and (critically) UseItem, "sent when the Entity swings as
+  part of using an item." Starting to hold right-click to charge fires a
+  UseItem-sourced swing at that exact moment, which was racing ahead of the
+  normal tick-based isUsing check and hijacking IdleState straight into
+  FastAtkState before ChargingState ever got a chance to start —
+  leaving the state machine (and whatever tp/fp animation had last been
+  triggered) stuck, since neither state was tracking the fact that the
+  player was still actually holding right-click. Both onSwing handlers
+  now bail unless event.swingSource === mc.EntitySwingSource.Attack.
+  Given Storm Slash and the normal charged attack both depend on
+  successfully staying in ChargingState for their full hold, this was
+  very likely also the root cause of Storm Slash failing to trigger
+  reliably while gliding — needs an in-game pass to confirm now that
+  charging itself can no longer be hijacked mid-press.
+
+### Investigated
+
+- Verified (but did not change): the fast-attack air-swing trigger itself
+  (onSwing -> FastAtkState, playing the animation and shooting the beam
+  unconditionally regardless of whether swingDamageNearbyEntities finds
+  any target) and the Storm Slash strike-phase steering math (from 1.8.19)
+  both read correctly in isolation. If air attacks and/or Storm Slash's
+  flight boost are still broken after this fix on a fresh test (not
+  following a stuck-charge attempt), that points to a separate issue this
+  pass didn't find — needs a precise repro (what state the sword was in
+  right before testing) to keep digging.
+
+---
+
+## [1.8.19]
+
+### Added
+
+- Implemented true air attacks: fast-attack swings now trigger from
+  mc.world.afterEvents.playerSwingStart, which fires on every swing
+  regardless of whether it connects with a block or entity. Previously
+  FastAtkState could only be entered from IdleState via onHitEntity/
+  onHitBlock, both of which strictly require a connected target — this
+  traced back through the addon's own history (found in an old prototype,
+  "slasherv2") to confirm the mechanism is real and was simply dropped
+  during a later rewrite. Wired as an additional trigger alongside the
+  existing hit-based ones, not a replacement — onSwing and onHitEntity/
+  onHitBlock firing for the same physical swing is expected and harmless,
+  since FastAtkState's requeue flag is a boolean, not a counter.
+
+### Fixed
+
+- Bug fix: Storm Slash's continuous mid-strike steering force was almost
+  entirely vertical regardless of where the player was actually looking.
+  physics.applyImpulse folds 90% of the entity's current vertical velocity
+  back into every impulse it applies (to simulate normal accumulation,
+  since Entity.applyKnockback's vertical parameter otherwise just replaces
+  it outright) — but applyKnockback's horizontal parameter already behaves
+  like a direct steer, so there's no equivalent carry-over on that axis.
+  Left alone, vertical velocity compounded every tick of the strike (up to
+  20 ticks) while horizontal kept getting reset to a small per-tick value,
+  so the dash snowballed into moving almost straight up or down depending
+  on pitch instead of boosting toward wherever the player was looking.
+  StormSlashStrikeState.createContinuousForce() now cancels that carry-over
+  itself so the steering force stays symmetric across all three axes,
+  without touching the shared physics.applyImpulse util (which the
+  single-shot Dash/Plunge impulses elsewhere may depend on behaving as-is).
+- The normal dash (ChargedAtkState) can no longer be triggered while
+  gliding. Its own forward impulse was otherwise usable as a free flight
+  boost that skipped Storm Slash's dedicated path entirely (which requires
+  staying glide-eligible for the whole charge hold). Releasing a full
+  charge while gliding without having qualified for Storm Slash now just
+  returns to idle instead of falling back to the ground-combat dash mid-air.
+
+---
+
+## [1.8.18]
+
+### Added
+
+- Added Storm Slash, ported from the "v4-1" build (same reimplementation
+  approach as 1.8.17's chainsaw hit effects — v4-1's own code couldn't be
+  copied verbatim since it's a different item on a different architecture,
+  so this is a faithful reimplementation using our own state-machine/config
+  conventions, not a literal port of v4-1's compiled script):
+  - Hold the charge-attack button while gliding (Elytra deployed) for
+    CONFIG.stormSlash.chargeDurationTicks (30 ticks/1.5s — gliding has to
+    hold for the *entire* charge, not just at the moment of release, or it
+    falls back to the normal charged attack/plunge branch). Releasing while
+    still gliding at that point launches a flight dash instead of the usual
+    charged attack: a brief windup, then a forward-impulse strike phase that
+    steers with view direction, ending either in a clean mid-air finish or
+    an impact if something solid gets in the way.
+  - New states: StormSlashWindupState, StormSlashStrikeState,
+    StormSlashFinishState, StormSlashImpactState, branching off
+    ChargingState.onReleaseStormSlash — see the state-machine doc comment
+    at the top of slasher.js for how this fits alongside the existing
+    charged-attack/plunge branches.
+  - The source has no scripted damage anywhere in this move — it's a pure
+    traversal/mobility ability (impulses + self-buffs so the forced
+    movement can't hurt the user + sound/camera feel), not an attack in the
+    damage-dealing sense. Ported as such; nothing here deals damage.
+  - Ported the fp windup/strike/impact animations directly from v4-1 —
+    current's fp rig has used v4-1's exact bone names since 1.8.15's mesh
+    port, so these came across essentially 1:1, unlike the reimplemented
+    script logic.
+  - v4-1 has no third-person animation for this move at all (fp only, even
+    in the source) — ported that way for now, so third-person viewers just
+    see whatever the default pose is during the dash. A real tp animation
+    for this is a natural follow-up but wasn't in scope here.
+  - New charging.stormChargeUiFrames/stormReadyUiFrames actionbar frames:
+    once a normal charge completes but the hold continues while gliding,
+    the actionbar switches to a storm-specific progress readout, then a
+    bold 3-color flash once storm-slash is ready — distinct from the
+    normal charge's 2-color flash, since it's a bigger payoff.
+  - New sounds: slasher.charged_storm_slash (ready cue),
+    storm_slash_windup/strike/impact (+.2d variants), and
+    storm_slash_finish/.2d (ported from v4-1's power_slash.ogg, renamed —
+    "power slash" isn't a concept that exists in this build, so kept the
+    audio but not that name).
+  - New utils/vec3.js#dot, used by the strike phase's steering calculation
+    (angle between current velocity and view direction).
+  - This move's impulses go through our existing physics.applyImpulse
+    (the applyKnockback-based replacement for the native, since-removed
+    applyImpulse — see utils/physics.js) rather than a raw native call,
+    for consistency with how Dash/Plunge already do it. That function has
+    different internal scaling than v4-1's native calls did, so the exact
+    flight distance/speed numbers here are a starting point, not a verified
+    match to the source's feel — genuinely needs an in-game pass.
+
+---
+
+## [1.8.17]
+
+### Added
+
+- Added chainsaw/lock-on hit effects, reimplemented from the "v4-1" build's
+  blood-burst concept using our own particle identifiers and namespace
+  (v4-1 itself couldn't be copied directly — different item id, different
+  architecture entirely):
+  - A small blood-burst particle (lc:slasher_chainsaw_hit_emitter) now
+    spawns at the target's body location on every tick a chainsaw hit
+    actually lands.
+  - A bigger burst (lc:slasher_chainsaw_finish_emitter) plays on every
+    target when the grab ends, plus — for the first 5 released targets —
+    a staggered (1 tick apart) camera shake, critical-hit sound, and
+    a quick sparkle particle (lc:slasher_chainsaw_sparkle_emitter), so a
+    multi-target release reads as a rapid one-two-three. Purely cosmetic:
+    no extra damage was added, only what onTickChainsawing already deals.
+  - Added CONFIG.lockonAtk.hitEffect / finishEffect for the particle ids,
+    staggered-target cap, and per-target delay.
+  - New assets: rp/particles/slasher_chainsaw_{hit,finish,sparkle}.
+    particle.json, plus the blood/sparkle textures + PBR companions
+    ported from v4-1 into rp/textures/particles/.
+  - Added utils/entity.js#getEntityBodyLocation (head/feet midpoint + a
+    small upward nudge) for placing these particles at a natural spot on
+    the target rather than at its feet-level .location.
+
+---
+
+## [1.8.16]
+
+### Fixed
+
+- Bug fix: the blade/chain never actually spun in any state (attacking,
+  charging, beam release, chainsaw hold). Every animation was correctly
+  setting v.blade_speed_mod to its intended target speed (this content
+  carried over correctly from the v4-1 port), but the attachable's easing
+  math was reading a different, never-updated variable (v.blade_speed_a,
+  stuck at 0 since initialization). Fixed the attachable to read
+  v.blade_speed_mod instead, so the existing smooth lerp-based easing
+  (already correctly written) now actually drives the chain, including a
+  natural ease down to a stop rather than an abrupt one.
+- Bug fix: charged_atk_end (the release-after-full-charge fp animation)
+  snapped back to the exact charging-hold pose in its last 1/24s instead
+  of continuing its own easing-down motion. Replaced that final keyframe
+  (rotation and position) with a value that continues the established
+  trend from the preceding frames, removing the reversal.
+
+---
+
+## [1.8.15]
+
+### Changed
+
+- Ported the weapon's visual identity from the earlier "v4-1" build over to
+  this codebase: new hilt/blade model and texture (fp + tp), new item icon,
+  and the charged-attack beam's model + texture. Gameplay code, the state
+  machine, damage/config values, and every existing identifier (item id,
+  geometry/animation/controller names, cooldown names) are unchanged — only
+  the mesh, texture, and animation CONTENT at those existing slots changed,
+  so nothing on the BP side needed to be touched.
+  - fp/tp geometry: v4-1's hilt+29-segment sawblade mesh replaces the old
+    13-cube hilt + 14-blade mesh, grafted onto the same anchor bones
+    (fp_rightarm_g for fp, rightItem for tp) 1.8.14 already used, translated
+    to sit at that anchor rather than v4-1's own. v4-1's model has no
+    separate "blade extend" or "trigger press" sub-bones the old mesh had,
+    so that specific micro-articulation is gone — the rest of the rig is
+    unaffected.
+  - fp animations: all 17 identifiers now carry v4-1 content. Direct
+    matches: pick, general, blade_cycle, fast_atk_1/2 (from
+    speed_slash_1/2), charging_start/hold (from charge_1/2), dash
+    (from charge_dash), charged_atk_start (from power_slash_start),
+    charged_atk_hold/end (from sawing_loop/release — same chainsaw-hold
+    concept, matches the chainsaw_loop/finish sounds both builds already
+    share). v4-1 never had a plunge attack, a 3rd/4th combo hit, or a
+    dash-into-charge variant, so those five (plunge_windup/fall/impact,
+    overhead_chop, two_handed_cleave, dash_charged_atk_start) are reusing
+    the closest existing v4-1 clip as a placeholder rather than dead/frozen
+    — see chat for the exact mapping. These are the ones most likely to
+    want a real bespoke animation later.
+  - tp animations: untouched. All 13 only ever moved leftArm/rightArm/
+    rightItem (the vanilla arm bones), never the weapon's own sub-bones, so
+    they keep working unmodified on the new mesh.
+  - charged-atk beam: model + texture replaced (v4-1's power_slash_beam).
+    The rotation/visibility animation binding (reads lc:rotation_x/y/z and
+    lc:is_visible off the entity) is untouched — that's the live aiming
+    mechanism, not cosmetic, so it stays wired exactly as it was. No v4-1
+    equivalent exists for the fast-atk beam; it's unchanged.
+  - Also carried over v4-1's PBR metalness/emissive/roughness maps
+    (slasher_mer.png, beam_charged_atk_mer.png + texture_set.json) as
+    same-name companions to the new base textures — inert for anyone not
+    using deferred/Vibrant Visuals rendering, additive for anyone who is.
+  - Left untouched (not part of this request): particle effects, sounds,
+    the slasher_blade item/icon, and the fast-atk beam's look.
+  - The new mesh's exact position/scale/rotation in-hand is computed from
+    the two models' pivot data, not visually verified — it's the one part
+    of this port that genuinely needs an in-game look. If anything sits
+    offset, rotated wrong on an axis, or mis-scaled, say which and it's a
+    quick, precise fix from there.
+
+---
+
+## [1.8.14]
+
+### Changed
+
+- Behavior change: hit 3 (overhead_chop) and hit 4 (two_handed_cleave) can
+  now only be queued by an actual left-click swing landing
+  (onHitEntity/onHitBlock). Previously, FastAtkState.onStopUsing() queued
+  the next combo step on ANY right-click release mid-combo too, with no
+  distinction between combo steps — so simply tapping right-click while
+  sitting at hit 2 or hit 3 would silently advance into hit 3 or hit 4
+  without the player having attacked anything. Added a per-step
+  requireAttackInput flag to CONFIG.fastAtk.combo (set on hit 3 and hit 4
+  only); onStopUsing() now checks it before queuing. Hit 1 and hit 2 are
+  unaffected — both left-click and right-click-release still advance the
+  combo into them, exactly as before.
+
+---
+
+## [1.8.13]
+
+### Fixed
+
+- Fixed a bug affecting both tp combo-finisher animations (overhead_chop and
+  two_handed_cleave): their final keyframe on every bone had no lerp_mode
+  set, which defaults to linear — the exact same "ends on a robotic snap"
+  issue that 1.8.12 fixed for the fp versions, but that fix was never
+  mirrored to tp. All four bones (body, leftArm, rightArm, rightItem) now
+  ease out on catmullrom all the way to the last frame, on both hits.
+- Bug fix: the fp overhead_chop and two_handed_cleave animations were
+  missing "loop": "hold_on_last_frame" and "blend_weight":
+  "v.fp_anim_blend_weight" — every other fp animation in the file sets
+  both. Without hold_on_last_frame, and with animation_length sized to
+  match the cooldown window exactly (no safety margin, unlike fast_atk_1/2
+  which finish well before their cooldown expires), there was a real risk
+  of the pose popping back to frame 0 for an instant before the controller
+  transitions out. Both fields are now set, consistent with the rest of the
+  file.
+- Bug fix: the tp overhead_chop and two_handed_cleave animations were
+  missing override_previous_animation (every other tp animation sets it to
+  true), which could let a chained swing into hit 3 or hit 4 blend from
+  whatever pose the prior swing's animation was fading out of instead of
+  cleanly overriding it. Added.
+- Deepened the anticipation pose on both hits, fp and tp — the windup/hold
+  keyframes now pull back further before the strike, with hit 4's pull-back
+  bigger than hit 3's so the combo reads as escalating in weight. Timing is
+  unchanged; only the pose depth increased.
+- Added secondary motion to the fp overhead_chop animation: fp_leftarm and
+  fp_head had no keyframes at all and sat fully static through the entire
+  swing. Both now get a small keyframed shift through the strike — a
+  support-hand brace and a slight head dip — settling back to the ready
+  pose by the end. fp_two_handed_cleave already had this on both bones;
+  its amplitude has been increased slightly so the finisher reads as a
+  bigger flourish than hit 3.
+- Retimed tp two_handed_cleave from 1.2s to 1.1s (every keyframe time
+  scaled proportionally, so the existing shape of the swing is otherwise
+  unchanged) to close most of the gap against its fp counterpart (1.05s) —
+  the widest fp/tp mismatch in the combo. tp overhead_chop's fp/tp gap was
+  already small (1.0s vs 0.95s) and was left alone.
+- None of the above touches fp animation_length or CONFIG.fastAtk.combo
+  timing, so cooldownTicks/lifespanTicks in config.js didn't need to
+  change.
+
+---
+
+## [1.8.12]
+
+### Fixed
+
+- Bug fix: the fp overhead_chop and two_handed_cleave animations ended
+  each swing on a keyframe with no lerp_mode set, which defaults to
+  linear — so after several catmullrom-eased keyframes through the
+  windup and strike, the final ~0.1-0.2s recovery back to the ready pose
+  snapped along a straight line instead of easing out. That's what read
+  as fast/unnatural/robotic at the end of the swing.
+- Retimed both animations: overhead_chop 0.75s -> 0.95s, two_handed_cleave
+  0.85s -> 1.05s. The windup and strike keep their original timing (still
+  fast and punchy); the extra time all goes to the recovery, which now
+  has an added settle keyframe and catmullrom easing all the way to the
+  ready pose instead of a single fast linear snap.
+- Synced fastAtk.combo cooldownTicks/lifespanTicks for overhead_chop
+  (15->19 / 22->26) and two_handed_cleave (17->21 / 25->29) to match the
+  new fp animation lengths.
+
+---
+
+## [1.8.11]
+
+### Fixed
+
+- Bug fix: removed minecraft:digger and the pickaxe/axe/diamond_tier tags
+  from the Slasher item. Left-click-on-a-block was being treated as mining
+  (hold-to-break, longer reach) instead of a discrete melee swing, which
+  interfered with the sword's own hit/beam-triggering logic in some cases.
+  Reverted to a pure melee-swing interaction on blocks (matching the
+  original v1.0.1 item profile) at the cost of the "can mine like a
+  diamond pickaxe/axe" side feature.
+
+---
+
+## [1.8.10]
+
+### Added
+
+- Added a 4-hit fast-attack combo, up from 2. Hit 3 is a heavier overhead
+  chop with a real anticipation beat; hit 4 is a two-handed finishing
+  cleave on a distinct diagonal swing plane (bigger hitbox and damage
+  multiplier than hits 1-2). FastAtkState now tracks a comboIndex driven
+  by a new CONFIG.fastAtk.combo table instead of the old binary
+  nextAnimIndex — whiffing the follow-up window or getting interrupted
+  into a different attack type both reset the combo back to hit 1.
+- Bug fix: both the fast-attack and charged-attack beams were dealing no
+  damage to mobs in the common case. The beam hit handlers had switched
+  from EntityDamageCause.override to .projectile at some point — projectile
+  is a "normal" damage cause that respects a target's brief post-hit
+  invulnerability window, and since these beams fire in the same instant
+  as the melee swing that spawned them (which already applied its own,
+  larger hit and started that window), the beam's much smaller damage
+  value was getting silently swallowed almost every time. Reverted to
+  .override, matching the behavior from 1.0.1.
+- Fixed the fast-attack combo cooldown durations, which had been reused
+  as both the JS-side "how long to wait for the next chained swing" timer
+  AND the RP-side value gating how long the fp animation controller stays
+  in that swing's state. Those are two different things — sizing the
+  latter to the gameplay combo window (which is deliberately longer than
+  the animation itself) left the fp arms frozen in a static held pose for
+  up to half a second after the swing animation had already finished
+  playing, before the controller would transition out. Split into two
+  separate config values (lifespanTicks for gameplay, cooldownTicks for
+  the RP animation state) and sized cooldownTicks to actually match each
+  fp animation's real length.
+- Added blend_transition to the fast_atk_1, fast_atk_2, overhead_chop,
+  two_handed_cleave, and pick states in the fp animation controller, so
+  entering/exiting the attack chain blends smoothly instead of snapping.
+- Retimed and reworked the hit 3 / hit 4 fp animations — both were
+  playing faster than their tp counterparts by a wider margin than the
+  rest of the combo, which read as rushed. Hit 4 also now swings on a
+  visibly different plane from hit 3 (diagonal cross-body vs. overhead)
+  instead of being a scaled-up copy of the same motion.
+
+---
+
+## [1.8.8–1.8.9]
+
+*Skipped releases.*
+
+---
+
 ## [1.8.7]
 
 ### Added
