@@ -284,12 +284,18 @@ function onFastAtkBeamHitEntity(event) {
       hitEntity,
       damage,
       {
-        // projectile, not override — override bypasses the target's
-        // Resistance at the engine level unconditionally, regardless of
-        // the snapshotted resistPierce flag below. getBeamResistPierce()
-        // (the sword's enchants at shoot-time) is meant to be the only
-        // thing that can bypass Resistance, not the damage cause itself.
-        cause: mc.EntityDamageCause.projectile,
+        // override, not projectile — these beams fire in the same instant
+        // as the melee swing that spawned them, which just applied its own
+        // (larger) damage and started the target's brief post-hit
+        // invulnerability window. A "normal" cause like projectile respects
+        // that window, so the beam's small damage value was getting
+        // silently swallowed almost every time it landed on a target that
+        // was also just melee'd — which, for these melee-range beams, is
+        // most of the time. override bypasses it, same as v1.0.1 (which
+        // worked). Trade-off: a beam can now land even if the target has
+        // Resistance and the sword lacks resist-piercing — acceptable next
+        // to "beams basically never do damage."
+        cause: mc.EntityDamageCause.override,
         damagingEntity: source,
       },
       getBeamResistPierce(event.projectile),
@@ -369,12 +375,18 @@ function onChargedAtkBeamHitEntity(event) {
       hitEntity,
       damage,
       {
-        // projectile, not override — override bypasses the target's
-        // Resistance at the engine level unconditionally, regardless of
-        // the snapshotted resistPierce flag below. getBeamResistPierce()
-        // (the sword's enchants at shoot-time) is meant to be the only
-        // thing that can bypass Resistance, not the damage cause itself.
-        cause: mc.EntityDamageCause.projectile,
+        // override, not projectile — these beams fire in the same instant
+        // as the melee swing that spawned them, which just applied its own
+        // (larger) damage and started the target's brief post-hit
+        // invulnerability window. A "normal" cause like projectile respects
+        // that window, so the beam's small damage value was getting
+        // silently swallowed almost every time it landed on a target that
+        // was also just melee'd — which, for these melee-range beams, is
+        // most of the time. override bypasses it, same as v1.0.1 (which
+        // worked). Trade-off: a beam can now land even if the target has
+        // Resistance and the sword lacks resist-piercing — acceptable next
+        // to "beams basically never do damage."
+        cause: mc.EntityDamageCause.override,
         damagingEntity: source,
       },
       getBeamResistPierce(event.projectile),
