@@ -1,0 +1,7 @@
+{
+	"format_version": "1.16.100",
+	"minecraft:texture_set": {
+		"color": "beam_fast_atk",
+		"metalness_emissive_roughness": "beam_fast_atk_mer"
+	}
+}
