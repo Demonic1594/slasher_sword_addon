@@ -182,8 +182,6 @@ mc.world.afterEvents.itemStartUse.subscribe((event) => {
 // Detect when a player stopped using an extended item
 mc.world.afterEvents.itemStopUse.subscribe((event) => {
   safeInvoke(`itemStopUse for player "${event.source?.name}"`, () => {
-    if (!event.itemStack) return;
-
     const itemExtWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(event.source);
 
     if (!itemExtWrapper) return;
@@ -193,6 +191,56 @@ mc.world.afterEvents.itemStopUse.subscribe((event) => {
     itemExtWrapper.itemExtender.onStopUsing(event);
   });
 });
+
+// Detect when a player swings an extended item, whether or not it connects
+// with anything — entityHitEntity/entityHitBlock only fire on a successful
+// hit, so this is the only way to detect a plain "attacked at open air"
+// swing.
+//
+// This is still an experimental (Beta APIs) event as of this build. If it
+// never seems to fire in-game even with Beta APIs on, check the content log
+// for the two messages below — they confirm whether the *subscription*
+// itself worked (which would rule out a manifest/toggle problem entirely
+// and point at something else) versus the event just never being dispatched
+// by this client's game version (which would mean the API isn't live yet on
+// whatever build is actually running, regardless of the world toggle).
+if (mc.world.afterEvents.playerSwingStart) {
+  console.warn(
+    "[Slasher] playerSwingStart is available — subscribing for air-attack detection.",
+  );
+
+  let loggedFirstSwing = false;
+
+  mc.world.afterEvents.playerSwingStart.subscribe((event) => {
+    const player = event.player;
+    if (!(player instanceof mc.Player)) return;
+
+    if (!loggedFirstSwing) {
+      loggedFirstSwing = true;
+      console.warn(
+        `[Slasher] playerSwingStart fired for the first time (player "${player?.name}", source "${event.swingSource}"). Air-attack detection is live.`,
+      );
+    }
+
+    safeInvoke(`playerSwingStart for player "${player?.name}"`, () => {
+      const advancedItemWrapper = ITEM_EXTENDER_WRAPPER_MAP.get(player);
+
+      if (!advancedItemWrapper) return;
+
+      advancedItemWrapper.itemExtender.onSwing(event);
+    });
+  });
+} else {
+  // mc.world.afterEvents.playerSwingStart doesn't exist on this client at
+  // all — the API surface isn't there, so no toggle can make it fire.
+  // Air attacks fall back entirely to the ChargingState tap-cancel path
+  // (right-click, release before a full charge) until it is.
+  console.warn(
+    "[Slasher] playerSwingStart is NOT available on this client — air " +
+      "attacks are limited to the charge-tap-cancel path (right-click, " +
+      "release early) until it is.",
+  );
+}
 
 // Detect when a player used an extended item to hit an entity
 mc.world.afterEvents.entityHitEntity.subscribe(
