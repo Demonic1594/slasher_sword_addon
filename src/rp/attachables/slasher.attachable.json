@@ -23,6 +23,8 @@
         "anim.fp.blade_cycle": "animation.slasher.fp.blade_cycle",
         "anim.fp.fast_atk_1": "animation.slasher.fp.fast_atk_1",
         "anim.fp.fast_atk_2": "animation.slasher.fp.fast_atk_2",
+        "anim.fp.overhead_chop": "animation.slasher.fp.overhead_chop",
+        "anim.fp.two_handed_cleave": "animation.slasher.fp.two_handed_cleave",
         "anim.fp.charging_start": "animation.slasher.fp.charging_start",
         "anim.fp.charging_hold": "animation.slasher.fp.charging_hold",
         "anim.fp.charged_atk_start": "animation.slasher.fp.charged_atk_start",
@@ -33,13 +35,16 @@
         "anim.fp.plunge_windup": "animation.slasher.fp.plunge_windup",
         "anim.fp.plunge_fall": "animation.slasher.fp.plunge_fall",
         "anim.fp.plunge_impact": "animation.slasher.fp.plunge_impact",
+        "anim.fp.storm_slash_windup": "animation.slasher.fp.storm_slash_windup",
+        "anim.fp.storm_slash_strike": "animation.slasher.fp.storm_slash_strike",
+        "anim.fp.storm_slash_impact": "animation.slasher.fp.storm_slash_impact",
         "anim.misc.blade_cycle": "animation.slasher.misc.blade_cycle"
       },
       "scripts": {
         "animate": ["ctrl.fp", "anim.misc.blade_cycle"],
         "initialize": [
           "v.blade_speed = 0;",
-          "v.blade_speed_a = 0;",
+          "v.blade_speed_mod = 0;",
           "v.blade_cycle_anim_time = 0;"
         ],
         "pre_animation": [
@@ -50,6 +55,8 @@
           "v.pick = q.cooldown_time_remaining('slasher_pick') > 0;",
           "v.fast_atk_1_cd = q.cooldown_time_remaining('slasher_fast_atk_1') > 0;",
           "v.fast_atk_2_cd = q.cooldown_time_remaining('slasher_fast_atk_2') > 0;",
+          "v.overhead_chop_cd = q.cooldown_time_remaining('slasher_overhead_chop') > 0;",
+          "v.two_handed_cleave_cd = q.cooldown_time_remaining('slasher_two_handed_cleave') > 0;",
           "v.charging_start = q.cooldown_time_remaining('slasher_charging_start') > 0;",
           // NOTE (1.0.7 audit): 'slasher_charging_cancel' is never started by
           // any script (grep the scripts for setCooldown — it isn't there),
@@ -66,9 +73,12 @@
           "v.plunge_windup = q.cooldown_time_remaining('slasher_plunge_windup') > 0;",
           "v.plunge_fall = q.cooldown_time_remaining('slasher_plunge_fall') > 0;",
           "v.plunge_impact = q.cooldown_time_remaining('slasher_plunge_impact') > 0;",
+          "v.storm_slash_windup = q.cooldown_time_remaining('slasher_storm_slash_windup') > 0;",
+          "v.storm_slash_strike = q.cooldown_time_remaining('slasher_storm_slash_strike') > 0;",
+          "v.storm_slash_impact = q.cooldown_time_remaining('slasher_storm_slash_impact') > 0;",
 
           // Saw cycle
-          "v.blade_speed = Math.lerp(v.blade_speed, v.blade_speed_a, 3.4 * q.delta_time);",
+          "v.blade_speed = Math.lerp(v.blade_speed, v.blade_speed_mod, 3.4 * q.delta_time);",
           "v.blade_cycle_anim_time = v.blade_cycle_anim_time + (q.delta_time * v.blade_speed);"
         ]
       },
