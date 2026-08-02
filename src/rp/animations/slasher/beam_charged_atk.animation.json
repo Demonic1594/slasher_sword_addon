@@ -1,37 +1,51 @@
 {
-	"format_version": "1.8.0",
-	"animations": {
-		"animation.slasher_beam_charged_atk.general": {
-			"loop": true,
-			"bones": {
-				"xy": {
-					"rotation": ["v.rotation_x", "v.rotation_y", 0],
-					"scale": "v.is_visible ? 1 : 0"
-				},
-				"z": {
-					"rotation": [0, 0, "v.rotation_z"]
-				}
-			}
-		},
-		"animation.slasher_beam_charged_atk.trail": {
-			"loop": true,
-			"animation_length": 1,
-			"particle_effects": {
-				"0.0": [
-					{
-						"effect": "trail",
-						"locator": "trail_1"
-					},
-					{
-						"effect": "trail",
-						"locator": "trail_2"
-					},
-					{
-						"effect": "trail",
-						"locator": "trail_3"
-					}
-				]
-			}
-		}
-	}
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.slasher_beam_charged_atk.base_rotation": {
+      "loop": true,
+      "bones": {
+        "yaw": {
+          "rotation": [0, "v.rotation_y", 0]
+        },
+        "pitch": {
+          "rotation": ["v.rotation_x", 0, 0]
+        },
+        "roll": {
+          "rotation": [0, 0, "v.rotation_z"]
+        }
+      }
+    },
+    "animation.slasher_beam_charged_atk.spin": {
+      "loop": true,
+      "animation_length": 1.7083,
+      "bones": {
+        "roll": {
+          "rotation": {
+            "0.0": [0, 0, 0],
+            "1.7083": [0, 0, -360]
+          }
+        }
+      }
+    },
+    "animation.slasher_beam_charged_atk.trail": {
+      "loop": true,
+      "animation_length": 1,
+      "particle_effects": {
+        "0.0": [
+          {
+            "effect": "trail",
+            "locator": "beam_trail_locator_1"
+          },
+          {
+            "effect": "trail",
+            "locator": "beam_trail_locator_2"
+          },
+          {
+            "effect": "trail",
+            "locator": "beam_trail_locator_3"
+          }
+        ]
+      }
+    }
+  }
 }
