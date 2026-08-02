@@ -6,10 +6,13 @@
       "states": {
         "pick": {
           "animations": ["anim.fp.pick"],
+          "blend_transition": 0.04,
           "transitions": [
             { "general": "q.all_animations_finished" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "charging_start": "v.charging_start" }
           ]
         },
@@ -19,23 +22,53 @@
             { "pick": "v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "charging_start": "v.charging_start" }
           ],
           "blend_transition": 0.05
         },
         "fast_atk_1": {
           "animations": ["anim.fp.fast_atk_1"],
+          "blend_transition": 0.05,
           "transitions": [
             { "pick": "!v.fast_atk_1_cd || v.pick" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "charging_start": "v.charging_start" }
           ]
         },
         "fast_atk_2": {
           "animations": ["anim.fp.fast_atk_2"],
+          "blend_transition": 0.05,
           "transitions": [
             { "pick": "!v.fast_atk_2_cd || v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
+            { "charging_start": "v.charging_start" }
+          ]
+        },
+        "overhead_chop": {
+          "animations": ["anim.fp.overhead_chop"],
+          "blend_transition": 0.06,
+          "transitions": [
+            { "pick": "!v.overhead_chop_cd || v.pick" },
+            { "fast_atk_1": "v.fast_atk_1_cd" },
+            { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
+            { "charging_start": "v.charging_start" }
+          ]
+        },
+        "two_handed_cleave": {
+          "animations": ["anim.fp.two_handed_cleave"],
+          "blend_transition": 0.06,
+          "transitions": [
+            { "pick": "!v.two_handed_cleave_cd || v.pick" },
+            { "fast_atk_1": "v.fast_atk_1_cd" },
+            { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
             { "charging_start": "v.charging_start" }
           ]
         },
@@ -49,10 +82,13 @@
             { "pick": "v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "charging_hold": "q.all_animations_finished" },
             { "dash": "v.dash" },
             { "charged_atk_start": "v.charged_atk_start" },
-            { "plunge_windup": "v.plunge_windup" }
+            { "plunge_windup": "v.plunge_windup" },
+            { "storm_slash_windup": "v.storm_slash_windup" }
           ],
           "blend_transition": 0.04
         },
@@ -63,9 +99,12 @@
             { "pick": "v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "dash": "v.dash" },
             { "charged_atk_start": "v.charged_atk_start" },
-            { "plunge_windup": "v.plunge_windup" }
+            { "plunge_windup": "v.plunge_windup" },
+            { "storm_slash_windup": "v.storm_slash_windup" }
           ],
           "blend_transition": 0.03
         },
@@ -101,7 +140,9 @@
               "charged_atk_end": "q.all_animations_finished && v.charged_atk_continue"
             },
             { "fast_atk_1": "v.fast_atk_1_cd" },
-            { "fast_atk_2": "v.fast_atk_2_cd" }
+            { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" }
           ]
         },
         "charged_atk_hold": {
@@ -111,7 +152,9 @@
             { "charging_start": "v.charging_start" },
             { "charged_atk_end": "v.charged_atk_end" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
-            { "fast_atk_2": "v.fast_atk_2_cd" }
+            { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" }
           ]
         },
         "charged_atk_end": {
@@ -120,7 +163,9 @@
             { "charging_start": "v.charging_start" },
             { "pick": "q.all_animations_finished || v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
-            { "fast_atk_2": "v.fast_atk_2_cd" }
+            { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" }
           ],
           "blend_transition": 0.15
         },
@@ -147,9 +192,36 @@
             { "pick": "q.all_animations_finished || v.pick" },
             { "fast_atk_1": "v.fast_atk_1_cd" },
             { "fast_atk_2": "v.fast_atk_2_cd" },
+            { "overhead_chop": "v.overhead_chop_cd" },
+            { "two_handed_cleave": "v.two_handed_cleave_cd" },
             { "charging_start": "v.charging_start" }
           ],
           "blend_transition": 0.06
+        },
+        "storm_slash_windup": {
+          "animations": ["anim.fp.storm_slash_windup"],
+          "transitions": [
+            { "pick": "v.pick" },
+            { "storm_slash_strike": "v.storm_slash_strike" }
+          ],
+          "blend_transition": 0.05
+        },
+        "storm_slash_strike": {
+          "animations": ["anim.fp.storm_slash_strike"],
+          "transitions": [
+            { "pick": "v.pick" },
+            { "storm_slash_impact": "v.storm_slash_impact" },
+            { "charging_start": "v.charging_start" }
+          ],
+          "blend_transition": 0.05
+        },
+        "storm_slash_impact": {
+          "animations": ["anim.fp.storm_slash_impact"],
+          "transitions": [
+            { "pick": "q.all_animations_finished || v.pick" },
+            { "charging_start": "v.charging_start" }
+          ],
+          "blend_transition": 0.05
         }
       }
     }
