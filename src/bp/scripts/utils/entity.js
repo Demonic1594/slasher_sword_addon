@@ -1,5 +1,19 @@
 import { Entity, EquipmentSlot, GameMode, Player, system, world } from "@minecraft/server";
 import { CONFIG } from "../config.js";
+import * as vec3 from "./vec3.js";
+
+/**
+ * A point roughly at the entity's chest/torso height — the midpoint between
+ * its head and feet locations, nudged up slightly. Used to place hit/impact
+ * particles somewhere more natural-looking than the entity's feet-level
+ * `.location`.
+ * @param {Entity} entity
+ * @returns {mc.Vector3}
+ */
+export function getEntityBodyLocation(entity) {
+  const midpoint = vec3.midpoint(entity.getHeadLocation(), entity.location);
+  return vec3.add(midpoint, { x: 0, y: 0.29, z: 0 });
+}
 
 /**
  * Whether the player's game mode is creative or spectator.
